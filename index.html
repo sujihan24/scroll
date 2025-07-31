@@ -1,0 +1,4145 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🍦 패턴에서 크리스탈로 - 개별 유기적 SVG 모핑</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: url('b_bg.png') center/cover no-repeat;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            
+        }
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+    </style>
+    
+</head>
+<body>
+
+    <script>
+        // PNG 이미지 변수들 (기존 코드 맨 위에 추가)
+        let pngImages = [];
+        let crystals = [];
+        let activeCrystal = -1;
+        let crystalProgress = [0, 0, 0];
+        let canvasWidth, canvasHeight;
+        
+        // 텍스트 해체 변수
+let scrollDisintegration = 0;
+
+        // 파티클 시스템 변수들
+        let particles = [];
+        let mouseParticles = [];
+        let shockwaves = [];
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+        let scrollVelocity = 0;
+        let lastScrollY = 0;
+        
+        // 파티클 클래스
+        class Particle {
+            constructor(x, y, type = 'ice') {
+                this.x = x;
+                this.y = y;
+                this.vx = random(-1, 1);
+                this.vy = random(0.5, 2);
+                this.size = random(2, 6);
+                this.angle = random(TWO_PI);
+                this.angleVel = random(-0.1, 0.1);
+                this.life = 1.0;
+                this.maxLife = random(60, 120);
+                this.type = type;
+                this.color = this.getColorForPosition();
+                this.gravity = 0.05;
+                this.airResistance = 0.99;
+            }
+            
+            getColorForPosition() {
+                // 마우스 위치에 따라 가장 가까운 크리스탈의 색상 반영
+                let closestDist = Infinity;
+                let closestCrystal = null;
+                
+                for (let crystal of crystals) {
+                    let d = dist(this.x, this.y, crystal.x, crystal.y);
+                    if (d < closestDist) {
+                        closestDist = d;
+                        closestCrystal = crystal;
+                    }
+                }
+                
+                if (closestCrystal && closestDist < 200) {
+                    let influence = map(closestDist, 0, 200, 1, 0);
+                    return {
+                        r: lerp(255, closestCrystal.color[0], influence),
+                        g: lerp(255, closestCrystal.color[1], influence),
+                        b: lerp(255, closestCrystal.color[2], influence)
+                    };
+                }
+                
+                return { r: 255, g: 255, b: 255 };
+            }
+            
+            update() {
+                // 물리 시뮬레이션
+                this.vy += this.gravity;
+                this.vx *= this.airResistance;
+                this.vy *= this.airResistance;
+                
+                // 스크롤 영향
+                this.vy += scrollVelocity * 0.1;
+                
+                this.x += this.vx;
+                this.y += this.vy;
+                this.angle += this.angleVel;
+                
+                this.life -= 1 / this.maxLife;
+                
+                // 충격파 영향
+                for (let shock of shockwaves) {
+                    let d = dist(this.x, this.y, shock.x, shock.y);
+                    if (d < shock.radius && d > shock.radius - 30) {
+                        let force = (1 - shock.life) * 10;
+                        let angle = atan2(this.y - shock.y, this.x - shock.x);
+                        this.vx += cos(angle) * force;
+                        this.vy += sin(angle) * force;
+                    }
+                }
+            }
+            
+            display() {
+                push();
+                translate(this.x, this.y);
+                rotate(this.angle);
+                
+                let alpha = this.life * 255;
+                fill(this.color.r, this.color.g, this.color.b, alpha * 0.8);
+                noStroke();
+                
+                // 다이아몬드 모양의 얼음 조각
+                beginShape();
+                vertex(0, -this.size);
+                vertex(this.size * 0.6, 0);
+                vertex(0, this.size);
+                vertex(-this.size * 0.6, 0);
+                endShape(CLOSE);
+                
+                // 반짝임 효과
+                if (random() < 0.3) {
+                    fill(255, 255, 255, alpha * 0.4);
+                    ellipse(0, 0, this.size * 0.5, this.size * 0.5);
+                }
+                
+                pop();
+            }
+            
+            isDead() {
+                return this.life <= 0 || this.y > canvasHeight + 50;
+            }
+        }
+        
+        // 마우스 따라다니는 파티클 클래스
+        class MouseParticle extends Particle {
+            constructor(x, y) {
+                super(x, y, 'mouse');
+                this.targetX = x;
+                this.targetY = y;
+                this.vx = random(-2, 2);
+                this.vy = random(-2, 2);
+                this.size = random(1, 4);
+                this.trail = [];
+                this.maxTrailLength = 5;
+            }
+            
+            update() {
+                // 마우스 따라가기
+                let dx = mouseX - this.x;
+                let dy = mouseY - this.y;
+                let dist = sqrt(dx * dx + dy * dy);
+                
+                if (dist > 5) {
+                    this.vx += dx * 0.02;
+                    this.vy += dy * 0.02;
+                }
+                
+                // 속도 제한
+                let speed = sqrt(this.vx * this.vx + this.vy * this.vy);
+                if (speed > 5) {
+                    this.vx = (this.vx / speed) * 5;
+                    this.vy = (this.vy / speed) * 5;
+                }
+                
+                this.vx *= 0.95;
+                this.vy *= 0.95;
+                
+                // 트레일 업데이트
+                this.trail.push({ x: this.x, y: this.y });
+                if (this.trail.length > this.maxTrailLength) {
+                    this.trail.shift();
+                }
+                
+                this.x += this.vx;
+                this.y += this.vy;
+                this.angle += this.angleVel;
+                
+                this.life -= 1 / this.maxLife;
+                this.color = this.getColorForPosition();
+            }
+            
+            display() {
+                // 트레일 그리기
+                for (let i = 0; i < this.trail.length; i++) {
+                    let t = this.trail[i];
+                    let alpha = map(i, 0, this.trail.length, 0, this.life * 100);
+                    fill(this.color.r, this.color.g, this.color.b, alpha);
+                    noStroke();
+                    let trailSize = map(i, 0, this.trail.length, this.size * 0.3, this.size);
+                    ellipse(t.x, t.y, trailSize, trailSize);
+                }
+                
+                // 메인 파티클
+                super.display();
+            }
+        }
+        
+        // 충격파 클래스
+        class Shockwave {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 0;
+                this.maxRadius = 300;
+                this.life = 1.0;
+                this.speed = 8;
+            }
+            
+            update() {
+                this.radius += this.speed;
+                this.life = 1 - (this.radius / this.maxRadius);
+                this.speed *= 0.98;
+            }
+            
+            display() {
+                push();
+                noFill();
+                strokeWeight(3);
+                stroke(255, 255, 255, this.life * 100);
+                ellipse(this.x, this.y, this.radius * 2, this.radius * 2);
+                
+                strokeWeight(1);
+                stroke(255, 255, 255, this.life * 50);
+                ellipse(this.x, this.y, (this.radius - 10) * 2, (this.radius - 10) * 2);
+                pop();
+            }
+            
+            isDead() {
+                return this.life <= 0;
+            }
+        }
+        
+        function setup() {
+
+            
+            // A3 비율 (1.414:1) 유지하면서 화면에 맞춤
+            let windowRatio = windowWidth / windowHeight;
+            let a3Ratio = 1.414;
+            
+            if (windowRatio > a3Ratio) {
+                canvasHeight = windowHeight;
+                canvasWidth = canvasHeight * a3Ratio;
+            } else {
+                canvasWidth = windowWidth;
+                canvasHeight = canvasWidth / a3Ratio;
+            }
+            
+            createCanvas(canvasWidth, canvasHeight);
+            
+            let spacing = canvasWidth / 3;
+            let graphicScale = Math.min(canvasWidth / 1200, canvasHeight / 600) * 3.5;
+            
+            crystals = [
+                { 
+                    x: spacing * 0.5, y: canvasHeight * 0.5, type: 0, 
+                    svgCenterX: 254.93, svgCenterY: 441.76, svgRadius: 197.9,
+                    color: [115, 187, 255], scale: graphicScale
+                },
+                { 
+                    x: spacing * 1.5, y: canvasHeight * 0.5, type: 1, 
+                    svgCenterX: 606.42, svgCenterY: 451.8, svgRadius: 192.54,
+                    color: [103, 172, 255], scale: graphicScale
+                },
+                { 
+                    x: spacing * 2.5, y: canvasHeight * 0.5, type: 2, 
+                    svgCenterX: 955.37, svgCenterY: 451.61, svgRadius: 176.28,
+                    color: [59, 158, 255], scale: graphicScale * 1.3
+                }
+            ];
+
+            pngImages[0] = loadImage('icy1.png'); // 첫 번째 크리스탈용
+    pngImages[1] = loadImage('icy2.png'); // 두 번째 크리스탈용  
+    pngImages[2] = loadImage('icy3.png'); // 세 번째 크리스탈용
+            
+            console.log('🍦 패턴에서 크리스탈로 - 개별 유기적 모핑 + 파티클 시스템 시작!');
+        }
+
+        function draw() {
+            clear();
+
+            
+            
+            // 배경 파티클 업데이트 및 그리기
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.update();
+                p.display();
+                
+                if (p.isDead()) {
+                    particles.splice(i, 1);
+                }
+            }
+            
+            // 랜덤 파티클 생성
+            if (frameCount % 2 === 0 && particles.length < 100) {
+                particles.push(new Particle(random(canvasWidth), -10));
+            }
+            
+            // 충격파 업데이트 및 그리기
+            for (let i = shockwaves.length - 1; i >= 0; i--) {
+                let shock = shockwaves[i];
+                shock.update();
+                shock.display();
+                
+                if (shock.isDead()) {
+                    shockwaves.splice(i, 1);
+                }
+            }
+            
+            // 크리스탈 그리기
+            for (let i = 0; i < crystals.length; i++) {
+                push();
+                translate(crystals[i].x, crystals[i].y);
+                
+                if (activeCrystal === i) {
+                    scale(1.03);
+                }
+                
+                scale(crystals[i].scale);
+                
+                // 각 크리스탈별 고유한 모핑 방식
+                if (i === 0) {
+                    drawCrystalType1_GeometricFlow(i, crystalProgress[i]);
+                } else if (i === 1) {
+                    drawCrystalType2_OrganicBloom(i, crystalProgress[i]);
+                } else {
+                    drawCrystalType3_FluidMelt(i, crystalProgress[i]);
+                }
+                
+                pop();
+            }
+            
+            // 마우스 파티클 업데이트 및 그리기
+            for (let i = mouseParticles.length - 1; i >= 0; i--) {
+                let p = mouseParticles[i];
+                p.update();
+                p.display();
+                
+                if (p.isDead()) {
+                    mouseParticles.splice(i, 1);
+                }
+            }
+
+        
+            
+            // 마우스 이동 시 파티클 생성
+            let mouseSpeed = dist(mouseX, mouseY, lastMouseX, lastMouseY);
+            if (mouseSpeed > 2 && frameCount % 1 === 0 && mouseParticles.length < 30) {
+                mouseParticles.push(new MouseParticle(mouseX + random(-10, 10), mouseY + random(-10, 10)));
+            }
+            
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+            
+            // 스크롤 속도 감쇠
+            scrollVelocity *= 0.9;
+        }
+
+        // 마우스 클릭 시 충격파 생성
+        function mousePressed() {
+            shockwaves.push(new Shockwave(mouseX, mouseY));
+            
+            // 충격파 중심에서 파티클 폭발
+            for (let i = 0; i < 40; i++) {
+                let p = new Particle(mouseX, mouseY);
+                let angle = random(TWO_PI);
+                let force = random(5, 15);
+                p.vx = cos(angle) * force;
+                p.vy = sin(angle) * force;
+                particles.push(p);
+            }
+        }
+
+        // 충격파 업데이트 및 그리기 (기존 코드 끝부분)
+// ...
+
+// 🌟 여기에 추가: 마우스 근처 배경 왜곡 효과
+push();
+for (let i = 0; i < 20; i++) {
+    let angle = (i / 20) * TWO_PI;
+    let distance = 80 + sin(frameCount * 0.03 + i) * 20;
+    let x = mouseX + cos(angle) * distance;
+    let y = mouseY + sin(angle) * distance;
+    
+    let alpha = 30 - (distance / 4);
+    fill(100, 149, 237, alpha);
+    noStroke();
+    ellipse(x, y, 3, 3);
+}
+pop();
+
+// 크리스탈 그리기 (기존 코드)
+for (let i = 0; i < crystals.length; i++) {
+    // ...
+}
+
+        // 스크롤 이벤트 처리
+        window.addEventListener('wheel', (e) => {
+            scrollVelocity = e.deltaY * 0.1;
+            
+            // 스크롤 시 파티클 생성
+            if (abs(scrollVelocity) > 2) {
+                for (let i = 0; i < 80; i++) {
+                    let p = new Particle(random(canvasWidth), random(canvasHeight));
+                    p.vy += scrollVelocity * 0.5;
+                    particles.push(p);
+                }
+            }
+        });
+
+        // 크리스탈 1: 기하학적 흐름 변환 (패턴 → 크리스탈 → 흐르는 형태 → 아이스크림)
+        function drawCrystalType1_GeometricFlow(index, progress) {
+            let crystal = crystals[index];
+            
+            let targetColors = [100, 149, 237];
+            let morphedColor = [
+                lerp(crystal.color[0], targetColors[0], easeInOutCubic(progress)),
+                lerp(crystal.color[1], targetColors[1], easeInOutCubic(progress)),
+                lerp(crystal.color[2], targetColors[2], easeInOutCubic(progress))
+            ];
+
+            // Phase 0: 복잡한 격자 패턴 (0-0.2)
+            if (progress <= 0.25) {
+                let patternProgress = map(progress, 0, 0.25, 1, 0);
+                let crystalProgress = map(progress, 0.15, 0.25, 0, 1);
+                
+                if (patternProgress > 0) {
+                    drawComplexGridPattern(crystal, morphedColor, patternProgress);
+                }
+                if (crystalProgress > 0 && progress >= 0.15) {
+                    let alpha = map(crystalProgress, 0, 1, 0, 180);
+                    drawOriginalSVG(index, crystal, morphedColor, alpha);
+                }
+            }
+            
+            // Phase 1과 2가 겹치도록 (0.25-0.55 구간에서 블렌딩)
+            else if (progress <= 0.55) {
+                let alpha = progress <= 0.3 ? map(progress, 0.25, 0.3, 180, 255) : 
+                            map(progress, 0.4, 0.55, 255, 0);
+                if (alpha > 0) {
+                    drawOriginalSVG(index, crystal, morphedColor, alpha);
+                }
+                
+                if (progress >= 0.35) {
+                    let flowProgress = map(progress, 0.35, 0.55, 0, 1);
+                    let flowAlpha = map(progress, 0.35, 0.55, 0, 255);
+                    
+                    push();
+                    tint(255, flowAlpha);
+                    drawGeometricFlow(crystal, morphedColor, flowProgress);
+                    pop();
+                }
+            }
+            
+            // Phase 3: 흐름이 모여서 둥근 형태 형성 (0.55-0.75)
+            else if (progress <= 0.75) {
+                let gatherProgress = map(progress, 0.55, 0.75, 0, 1);
+                drawFlowGathering(crystal, morphedColor, gatherProgress);
+            }
+            
+            // Phase 4: 최종 아이스크림 형성 (0.75-0.9)로 변경
+else if (progress <= 0.9) {
+    let finalProgress = map(progress, 0.75, 0.9, 0, 1);
+    drawLemonIceCream(finalProgress);
+}
+// Phase 5: PNG 이미지로 모핑 (0.9-1.0) 추가
+else {
+    let pngProgress = map(progress, 0.9, 1.0, 0, 1);
+    drawPNGMorphing(0, pngProgress); // 첫 번째 크리스탈용 PNG
+}
+        }
+
+        // 복잡한 격자 패턴 (크리스탈 1용)
+        function drawComplexGridPattern(crystal, color, progress) {
+            push();
+            
+            let time = frameCount * 0.02;
+            let gridSize = 20;
+            let cellSize = 4.5;
+            let centerOffset = gridSize * cellSize * 0.5;
+            
+            // 메인 격자
+            for (let i = 0; i < gridSize; i++) {
+                for (let j = 0; j < gridSize; j++) {
+                    let x = i * cellSize - centerOffset;
+                    let y = j * cellSize - centerOffset;
+                    
+                    // 거리 기반 웨이브
+                    let dist = sqrt(x * x + y * y);
+                    let wave = sin(dist * 0.1 + time) * 0.5 + 0.5;
+                    
+                    // 체커보드 패턴
+                    let checker = (i + j) % 2;
+                    let intensity = checker * wave * progress;
+                    
+                    // 수정: cornflower 기반으로 통일
+let baseR = 100, baseG = 149, baseB = 237; // cornflower
+let r = baseR + sin(time + i * 0.3) * 20 * intensity;
+let g = baseG + cos(time + j * 0.3) * 20 * intensity;
+let b = baseB + sin(time + (i + j) * 0.2) * 20 * intensity;
+                    
+                    fill(r, g, b, 255 * intensity * progress);
+                    noStroke();
+                    
+                    // 회전하는 사각형
+                    push();
+                    translate(x, y);
+                    rotate(time + dist * 0.02);
+                    rect(-cellSize * 0.3, -cellSize * 0.3, cellSize * 0.6, cellSize * 0.6);
+                    pop();
+                }
+            }
+            
+            // 보조 원형 패턴
+            for (let ring = 1; ring <= 4; ring++) {
+                let radius = ring * 12;
+                let segments = ring * 6;
+                
+                for (let i = 0; i < segments; i++) {
+                    let angle = (i / segments) * TWO_PI;
+                    let x = cos(angle + time * ring * 0.1) * radius;
+                    let y = sin(angle + time * ring * 0.1) * radius;
+                    
+                    let pulsePhase = time + ring + i * 0.5;
+                    let pulse = sin(pulsePhase) * 0.5 + 0.5;
+                    
+                    fill(color[0], color[1], color[2], 150 * pulse * progress);
+                    noStroke();
+                    ellipse(x, y, 3 + pulse * 2, 3 + pulse * 2);
+                }
+            }
+            
+            // 중앙 복잡한 만다라 패턴
+            push();
+            translate(0, 0);
+            
+            for (let layer = 0; layer < 3; layer++) {
+                let layerRadius = (layer + 1) * 12;
+                let spokes = (layer + 1) * 8;
+                
+                for (let i = 0; i < spokes; i++) {
+                    let spokeAngle = (i / spokes) * TWO_PI + time * (layer + 1) * 0.15;
+                    
+                    push();
+                    rotate(spokeAngle);
+                    
+                    // 복잡한 기하학적 형태
+                    for (let segment = 0; segment < 3; segment++) {
+                        let segmentDist = layerRadius + segment * 5;
+                        let segmentSize = 2 + segment;
+                        
+                        let oscillation = sin(time * 2 + layer + segment + i) * 0.5 + 0.5;
+                        
+                        // 수정:
+fill(
+    100 + oscillation * 30,
+    149 + oscillation * 30,
+    237 + oscillation * 30,
+    200 * oscillation * progress
+);
+                        
+                        // 다양한 형태
+                        if ((i + segment) % 3 === 0) {
+                            ellipse(0, segmentDist, segmentSize, segmentSize);
+                        } else if ((i + segment) % 3 === 1) {
+                            rect(-segmentSize/2, segmentDist - segmentSize/2, segmentSize, segmentSize);
+                        } else {
+                            // 삼각형
+                            beginShape();
+                            vertex(0, segmentDist - segmentSize/2);
+                            vertex(-segmentSize/2, segmentDist + segmentSize/2);
+                            vertex(segmentSize/2, segmentDist + segmentSize/2);
+                            endShape(CLOSE);
+                        }
+                    }
+                    
+                    pop();
+                }
+            }
+            
+            pop();
+            
+            pop();
+        }
+
+        // 크리스탈 2: 유기체 개화 변환 (패턴 → 크리스탈 → 꽃잎처럼 펼쳐짐 → 아이스크림)
+        function drawCrystalType2_OrganicBloom(index, progress) {
+            let crystal = crystals[index];
+            
+            let targetColors = [100, 149, 237];
+            let morphedColor = [
+                lerp(crystal.color[0], targetColors[0], easeInOutCubic(progress)),
+                lerp(crystal.color[1], targetColors[1], easeInOutCubic(progress)),
+                lerp(crystal.color[2], targetColors[2], easeInOutCubic(progress))
+            ];
+            
+            // Phase 0: 동심원 파동 패턴 (0-0.2)
+            if (progress <= 0.25) {
+                let patternProgress = map(progress, 0, 0.25, 1, 0);
+                let crystalProgress = map(progress, 0.15, 0.25, 0, 1);
+                
+                if (patternProgress > 0) {
+                    drawConcentricWavePattern(crystal, morphedColor, patternProgress);
+                }
+                if (crystalProgress > 0 && progress >= 0.15) {
+                    let alpha = map(crystalProgress, 0, 1, 0, 200);
+                    drawOriginalSVG(index, crystal, morphedColor, alpha);
+                }
+            }
+            
+            // Phase 1: 원본 SVG (0.25-0.4)
+            else if (progress <= 0.45) {
+                let alpha = map(progress, 0.25, 0.45, 200, 200);
+                drawOriginalSVG(index, crystal, morphedColor, alpha);
+            }
+            
+            // Phase 2: 중심에서 꽃잎처럼 펼쳐짐 (0.45-0.7)
+            else if (progress <= 0.7) {
+                let bloomProgress = map(progress, 0.45, 0.7, 0, 1);
+                drawOrganicBloom(crystal, morphedColor, bloomProgress);
+            }
+            
+            // Phase 3: 꽃잎들이 회전하며 구형으로 수렴 (0.7-0.85)
+            else if (progress <= 0.85) {
+                let spiralProgress = map(progress, 0.7, 0.85, 0, 1);
+                drawSpiralConvergence(crystal, morphedColor, spiralProgress);
+            }
+            
+            // Phase 4: 최종 아이스크림 형성 (0.85-0.95)로 변경
+else if (progress <= 0.95) {
+    let finalProgress = map(progress, 0.85, 0.95, 0, 1);
+    drawStrawberryIceCream(morphedColor, finalProgress);
+}
+// Phase 5: PNG 이미지로 모핑 (0.95-1.0) 추가
+else {
+    let pngProgress = map(progress, 0.95, 1.0, 0, 1);
+    drawPNGMorphing(1, pngProgress); // 두 번째 크리스탈용 PNG
+}
+        }
+
+        // 동심원 파동 패턴 (크리스탈 2용)
+        function drawConcentricWavePattern(crystal, color, progress) {
+            push();
+            
+            let time = frameCount * 0.03;
+            let maxRadius = 18;
+            let rings = 12;
+            
+            // 메인 동심원들
+            for (let ring = 0; ring < rings; ring++) {
+                let radius = (ring + 1) * (maxRadius / rings);
+                let wave = sin(time - ring * 0.3) * 0.5 + 0.5;
+                let alpha = wave * progress * (1 - ring / rings);
+                
+                // 각 링마다 다른 세그먼트 수
+                let segments = 18 + ring * 2;
+                
+                for (let i = 0; i < segments; i++) {
+                    let angle = (i / segments) * TWO_PI + time * 0.5;
+                    let x = cos(angle) * radius;
+                    let y = sin(angle) * radius;
+                    
+                    // 세그먼트별 펄스
+                    let segmentPulse = sin(time * 2 + i * 0.2 + ring) * 0.5 + 0.5;
+                    
+                    let finalAlpha = alpha * segmentPulse;
+                    
+                    fill(
+                        color[0] + ring * 5,
+                        color[1] + ring * 5,
+                        color[2] + ring * 5,
+                        255 * finalAlpha
+                    );
+                    noStroke();
+                    
+                    ellipse(x, y, 2 + segmentPulse * 2, 2 + segmentPulse * 2);
+                }
+            }
+            
+            // 방사형 스포크 패턴
+            let spokes = 30;
+            for (let i = 0; i < spokes; i++) {
+                let spokeAngle = (i / spokes) * TWO_PI + time * 0.2;
+                let spokeWave = sin(time * 3 + i * 0.5) * 0.5 + 0.5;
+                
+                push();
+                rotate(spokeAngle);
+                
+                // 스포크를 따라 점들 배치
+                for (let dist = 8; dist < maxRadius; dist += 8) {
+                    let distWave = sin(time * 1.5 + dist * 0.1) * 0.5 + 0.5;
+                    let pointAlpha = spokeWave * distWave * progress;
+                    
+                    fill(color[0], color[1], color[2], 150 * pointAlpha);
+                    ellipse(0, dist, 1.5, 1.5);
+                }
+                
+                pop();
+            }
+            
+            // 중앙 복잡한 나선
+            let spiralPoints = 150;
+            for (let i = 0; i < spiralPoints; i++) {
+                let spiralProgress = i / spiralPoints;
+                let spiralRadius = spiralProgress * 30;
+                let spiralAngle = spiralProgress * PI * 6 + time;
+                
+                let x = cos(spiralAngle) * spiralRadius;
+                let y = sin(spiralAngle) * spiralRadius;
+                
+                let spiralPulse = sin(time * 4 + i * 0.1) * 0.5 + 0.5;
+                
+                fill(
+                    color[0] + spiralPulse * 30,
+                    color[1] + spiralPulse * 30,
+                    color[2] + spiralPulse * 30,
+                    200 * spiralPulse * progress
+                );
+                noStroke();
+                ellipse(x, y, 2 + spiralPulse, 2 + spiralPulse);
+            }
+            
+            // 외곽 파동 효과
+            let outerWaves = 6;
+            for (let wave = 0; wave < outerWaves; wave++) {
+                let waveRadius = maxRadius + wave * 10;
+                let waveIntensity = sin(time - wave * 0.8) * 0.5 + 0.5;
+                
+                if (waveIntensity > 0.3) {
+                    strokeWeight(1 + waveIntensity * 2);
+                    stroke(color[0], color[1], color[2], 100 * waveIntensity * progress);
+                    noFill();
+                    ellipse(0, 0, waveRadius * 2, waveRadius * 2);
+                }
+            }
+            
+            pop();
+        }
+
+        // 크리스탈 3: 유체 용해 변환 (패턴 → 크리스탈 → 액체처럼 흘러 합쳐짐 → 아이스크림)
+        function drawCrystalType3_FluidMelt(index, progress) {
+            let crystal = crystals[index];
+            
+            let targetColors = [100, 149, 237];
+            let morphedColor = [
+                lerp(crystal.color[0], targetColors[0], easeInOutCubic(progress)),
+                lerp(crystal.color[1], targetColors[1], easeInOutCubic(progress)),
+                lerp(crystal.color[2], targetColors[2], easeInOutCubic(progress))
+            ];
+            
+            // Phase 0: 삼각형 테셀레이션 패턴 (0-0.25)
+            if (progress <= 0.25) {
+                let patternProgress = map(progress, 0, 0.25, 1, 0);
+                let crystalProgress = map(progress, 0.15, 0.25, 0, 1);
+                
+                if (patternProgress > 0) {
+                    drawTriangularTessellationPattern(crystal, morphedColor, patternProgress);
+                }
+                if (crystalProgress > 0 && progress >= 0.15) {
+                    let alpha = map(crystalProgress, 0, 1, 0, 180);
+                    drawOriginalSVG(index, crystal, morphedColor, alpha);
+                }
+            }
+            
+            // Phase 1: 원본 SVG (0.25-0.4)
+            else if (progress <= 0.43) {
+                let alpha = map(progress, 0.25, 0.43, 180, 180);
+                drawOriginalSVG(index, crystal, morphedColor, alpha);
+            }
+            
+            // Phase 2: 삼각형 조각들이 액체처럼 녹아내림 (0.43-0.65)
+            else if (progress <= 0.65) {
+                let meltProgress = map(progress, 0.43, 0.65, 0, 1);
+                drawFluidMelt(crystal, morphedColor, meltProgress);
+            }
+            
+            // Phase 3: 액체가 표면장력으로 구형 형성 (0.65-0.8)
+            else if (progress <= 0.8) {
+                let surfaceProgress = map(progress, 0.65, 0.8, 0, 1);
+                drawSurfaceTension(crystal, morphedColor, surfaceProgress);
+            }
+            
+            // Phase 4: 최종 아이스크림 형성 (0.8-0.9)로 변경
+else if (progress <= 0.9) {
+    let finalProgress = map(progress, 0.8, 0.9, 0, 1);
+    drawBlueberryIceCream(morphedColor, finalProgress);
+}
+// Phase 5: PNG 이미지로 모핑 (0.9-1.0) 추가
+else {
+    let pngProgress = map(progress, 0.9, 1.0, 0, 1);
+    drawPNGMorphing(2, pngProgress); // 세 번째 크리스탈용 PNG
+}
+        }
+
+        // 삼각형 테셀레이션 패턴 (크리스탈 3용)
+        function drawTriangularTessellationPattern(crystal, color, progress) {
+            push();
+            
+            let time = frameCount * 0.025;
+            let triangleSize = 3; // 더 작게
+            let rows = 20; // 더 적게
+            let cols = 20; // 더 적게
+            
+            // 허니컴 스타일 삼각형 격자 - 파티클처럼
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < cols; col++) {
+                    let isEvenRow = row % 2 === 0;
+                    let offsetX = isEvenRow ? 0 : triangleSize * 0.5;
+                    
+                    let x = (col - cols/2) * triangleSize + offsetX;
+                    let y = (row - rows/2) * triangleSize * 0.866; // sqrt(3)/2
+                    
+                    // 거리 기반 애니메이션
+                    let dist = sqrt(x * x + y * y);
+                    let wave = sin(dist * 0.15 + time * 2) * 0.5 + 0.5;
+                    
+                    // 삼각형 방향 (위/아래)
+                    let isUpward = (row + col) % 2 === 0;
+                    
+                    // 크리스탈로 수렴하는 효과
+                    let convergence = map(progress, 0.7, 1, 0, 1);
+                    convergence = constrain(convergence, 0, 1);
+                    
+                    // 크리스탈의 삼각형 조각 위치로 수렴
+                    let trianglePositions = [
+                        {x: -20, y: -25}, {x: 15, y: -20}, {x: -10, y: 5}, 
+                        {x: 25, y: 10}, {x: 0, y: 30}, {x: -30, y: 15}
+                    ];
+                    let targetIndex = (row * cols + col) % trianglePositions.length;
+                    let target = trianglePositions[targetIndex];
+                    
+                    let finalX = lerp(x, target.x, convergence);
+                    let finalY = lerp(y, target.y, convergence);
+                    
+                    // 동적 색상과 크기
+                    let colorShift = sin(time + row * 0.3 + col * 0.2) * 20;
+                    let sizeMultiplier = 0.6 + wave * 0.3; // 더 작게
+                    
+                    fill(
+                        color[0] + colorShift,
+                        color[1] + colorShift * 0.8,
+                        color[2] + colorShift * 1.2,
+                        200 * wave * progress
+                    );
+                    noStroke();
+                    
+                    push();
+                    translate(finalX, finalY);
+                    rotate(time * 0.5 + dist * 0.02);
+                    scale(sizeMultiplier);
+                    
+                    // 삼각형 그리기 - 더 작게
+                    let size = triangleSize * 0.6; // 더 작게
+                    beginShape();
+                    if (isUpward) {
+                        vertex(0, -size * 0.577); // 꼭짓점이 위
+                        vertex(-size * 0.5, size * 0.289);
+                        vertex(size * 0.5, size * 0.289);
+                    } else {
+                        vertex(0, size * 0.577); // 꼭짓점이 아래
+                        vertex(-size * 0.5, -size * 0.289);
+                        vertex(size * 0.5, -size * 0.289);
+                    }
+                    endShape(CLOSE);
+                    
+                    pop();
+                }
+            }
+            
+            // 중앙 복잡한 프랙탈 삼각형 - 더 작게
+            push();
+            translate(0, 0);
+            
+            for (let level = 0; level < 3; level++) { // 더 적게
+                let levelSize = (level + 1) * 8; // 더 작게
+                let triangles = pow(2, level); // 더 적게
+                
+                // 크리스탈로 수렴
+                let convergence = map(progress, 0.8, 1, 0, 1);
+                convergence = constrain(convergence, 0, 1);
+                
+                for (let i = 0; i < triangles; i++) {
+                    let angle = (i / triangles) * TWO_PI + time * (level + 1) * 0.1;
+                    let radius = levelSize + sin(time + level + i) * 3; // 더 작게
+                    
+                    let finalRadius = radius * (1 - convergence * 0.7);
+                    
+                    let x = cos(angle) * finalRadius;
+                    let y = sin(angle) * finalRadius;
+                    
+                    let pulse = sin(time * 3 + level + i * 0.5) * 0.5 + 0.5;
+                    
+                    fill(
+                        color[0] + pulse * 30,
+                        color[1] + pulse * 20,
+                        color[2] + pulse * 15,
+                        150 * pulse * progress
+                    );
+                    
+                    push();
+                    translate(x, y);
+                    rotate(angle + time);
+                    scale(0.4 + pulse * 0.2); // 더 작게
+                    
+                    // 작은 삼각형
+                    beginShape();
+                    vertex(0, -2.5); // 더 작게
+                    vertex(-2.2, 1.25);
+                    vertex(2.2, 1.25);
+                    endShape(CLOSE);
+                    
+                    pop();
+                }
+            }
+            
+            // 방사형 삼각형 스포크 - 더 작게
+            let spokes = 12; // 더 적게
+            for (let i = 0; i < spokes; i++) {
+                let spokeAngle = (i / spokes) * TWO_PI + time * 0.3;
+                let spokeWave = sin(time * 2 + i) * 0.5 + 0.5;
+                push();
+                rotate(spokeAngle);
+                
+                for (let dist = 15; dist < 60; dist += 12) {
+                    let distWave = sin(time * 1.5 + dist * 0.1 + i) * 0.5 + 0.5;
+                    let triangleAlpha = spokeWave * distWave * progress;
+                    
+                    if (triangleAlpha > 0.1) {
+                        push();
+                        translate(0, dist);
+                        rotate(dist * 0.1 + time);
+                        
+                        fill(color[0], color[1], color[2], 150 * triangleAlpha);
+                        noStroke();
+                        
+                        beginShape();
+                        vertex(0, -3);
+                        vertex(-2.6, 1.5);
+                        vertex(2.6, 1.5);
+                        endShape(CLOSE);
+                        
+                        pop();
+                    }
+                }
+                
+                pop();
+            }
+            
+            // 외곽 회전하는 삼각형 링
+            for (let ring = 0; ring < 3; ring++) {
+                let ringRadius = 20 + ring * 10;
+                let ringTriangles = 8 + ring * 4;
+                let ringRotation = time * (ring + 1) * 0.2;
+                
+                for (let i = 0; i < ringTriangles; i++) {
+                    let angle = (i / ringTriangles) * TWO_PI + ringRotation;
+                    let x = cos(angle) * ringRadius;
+                    let y = sin(angle) * ringRadius;
+                    
+                    let ringPulse = sin(time * 2 + ring + i * 0.3) * 0.5 + 0.5;
+                    
+                    if (ringPulse > 0.2) {
+                        push();
+                        translate(x, y);
+                        rotate(angle + time * 2);
+                        scale(0.6 + ringPulse * 0.4);
+                        
+                        fill(
+                            color[0] + ring * 10,
+                            color[1] + ring * 10,
+                            color[2] + ring * 10,
+                            100 * ringPulse * progress
+                        );
+                        noStroke();
+                        
+                        beginShape();
+                        vertex(0, -4);
+                        vertex(-3.46, 2);
+                        vertex(3.46, 2);
+                        endShape(CLOSE);
+                        
+                        pop();
+                    }
+                }
+            }
+            
+            pop();
+        }
+
+        function drawGeometricFlow(crystal, color, progress) {
+    push();
+    
+    // 원본 직사각형들의 위치에서 시작
+    let rects = [
+        {x: -15, y: -30, w: 20, h: 35},
+        {x: 5, y: -10, w: 35, h: 20},
+        {x: -25, y: -10, w: 35, h: 20},
+        {x: -10, y: 10, w: 20, h: 35}
+    ];
+    
+    // 안전한 진행 단계 계산
+    let phase1 = Math.min(Math.max(progress * 2.5, 0), 1); // 초기 용해
+    let phase2 = Math.min(Math.max((progress - 0.3) * 2.5, 0), 1); // 흐름
+    let phase3 = Math.min(Math.max((progress - 0.6) * 2.5, 0), 1); // 액화
+    
+    for (let i = 0; i < rects.length; i++) {
+        push();
+        
+        let flowDirection = i % 2 === 0 ? 1 : -1;
+        let rectSeed = i * 1.5; // 단순화된 시드
+        
+        // 1단계: 형태 용해
+        let dissolve = phase1 * phase1; // 제곱으로 부드러운 가속
+        let cornerRadius = 8 + dissolve * rects[i].w * 0.6;
+        
+        // 미세한 진동
+        let shake = Math.sin(frameCount * 0.05 + rectSeed) * dissolve * 1.5;
+        
+        // 2단계: 흐름 효과
+        let flow = phase2 * phase2;
+        let flowY = flow * (15 + i * 5) + Math.sin(frameCount * 0.03 + rectSeed) * flow * 2;
+        let flowX = Math.sin(frameCount * 0.08 + rectSeed) * 4 * flowDirection * flow + shake;
+        
+        // 3단계: 변형
+        let liquid = phase3 * phase3;
+        let stretchY = 1 + flow * (1.2 + Math.sin(rectSeed) * 0.2);
+        let stretchX = 1 - liquid * (0.3 + Math.cos(frameCount * 0.02 + rectSeed) * 0.1);
+        
+        // 중심으로 수렴
+        if (liquid > 0) {
+            let pullX = rects[i].x > 0 ? -liquid * 3 : liquid * 3;
+            flowX += pullX;
+        }
+        
+        // 회전
+        let rotation = flow * 20 * flowDirection + Math.sin(frameCount * 0.02 + rectSeed) * 8;
+        
+        // 색상 변화
+        let colorShift = Math.sin(progress * Math.PI + rectSeed) * 12;
+        let alpha = 220 - progress * 40 + Math.sin(frameCount * 0.03 + rectSeed) * 8;
+        
+        fill(color[0] + colorShift, color[1] + colorShift * 0.5, color[2] - colorShift * 0.3, alpha);
+        noStroke();
+        
+        translate(rects[i].x + flowX, rects[i].y + flowY);
+        rotate(rotation * Math.PI / 180);
+        scale(stretchX, stretchY);
+        
+        rect(-rects[i].w/2, -rects[i].h/2, rects[i].w, rects[i].h, cornerRadius);
+        
+        pop();
+    }
+    
+    pop();
+}
+
+function drawFlowGathering(crystal, color, progress) {
+    push();
+    
+    // 안전한 단계 계산
+    let gather1 = Math.min(Math.max(progress * 3, 0), 1);
+    let gather2 = Math.min(Math.max((progress - 0.2) * 2.5, 0), 1);
+    let gather3 = Math.min(Math.max((progress - 0.5) * 2, 0), 1);
+    
+    // 미세 파티클
+    let particleCount = Math.floor(15 * (1 - gather1));
+    for (let j = 0; j < particleCount; j++) {
+        let angle = j * 24 + frameCount * 0.3;
+        let distance = 40 * (1 - gather1) + Math.sin(frameCount * 0.06 + j) * 3;
+        let size = 2.5 * (1 - gather1) + Math.sin(frameCount * 0.1 + j) * 0.5;
+        
+        if (size > 0.5) {
+            let px = Math.cos(angle * Math.PI / 180) * distance;
+            let py = Math.sin(angle * Math.PI / 180) * distance * 0.8 + 12;
+            
+            let alpha = (1 - gather1) * 80 + Math.sin(frameCount * 0.05 + j) * 15;
+            fill(color[0], color[1], color[2], alpha);
+            ellipse(px, py, size, size * 1.1);
+        }
+    }
+    
+    // 메인 방울들
+    for (let i = 0; i < 6; i++) {
+        let angle = i * 60;
+        let convergence = gather2 * gather2;
+        let distance = 25 * (1 - gather1) - convergence * 12;
+        
+        // 방울 간 상호작용 (단순화)
+        let interaction = Math.sin(frameCount * 0.04 + i) * (1 - convergence) * 1.5;
+        
+        let x = Math.cos(angle * Math.PI / 180) * distance + interaction;
+        let y = Math.sin(angle * Math.PI / 180) * distance * 0.7 + 8;
+        
+        // 크기와 변형
+        let baseSize = 12 + gather1 * 25;
+        let pulse = Math.sin(frameCount * 0.08 + i) * 2;
+        let size = baseSize + pulse;
+        let stretch = 1.1 + Math.sin(frameCount * 0.06 + i) * 0.1 + convergence * 0.15;
+        
+        let alpha = 120 + gather1 * 80 + Math.sin(frameCount * 0.04 + i) * 12;
+        fill(color[0], color[1], color[2], alpha);
+        ellipse(x, y, size, size * stretch);
+    }
+    
+    // 중심 융합 덩어리
+    if (gather3 > 0) {
+        let fusion = gather3 * gather3;
+        let coreSize = 20 + fusion * 50;
+        
+        // 내부 움직임
+        let moveX = Math.sin(frameCount * 0.025) * fusion * 1.5;
+        let moveY = Math.cos(frameCount * 0.02) * fusion * 1;
+        
+        // 표면 파동
+        let wave = Math.sin(frameCount * 0.05) * fusion * 2.5;
+        let finalSize = coreSize + wave;
+        
+        // 메인 바디
+        fill(color[0], color[1], color[2], 180 + fusion * 35);
+        ellipse(moveX, 6 + moveY, finalSize, finalSize * 1.08);
+        
+        // 하이라이트
+        if (fusion > 0.3) {
+            let highlight = (fusion - 0.3) / 0.7;
+            let hlSize = finalSize * (0.55 + Math.sin(frameCount * 0.04) * 0.05);
+            
+            fill(color[0] + 20, color[1] + 12, color[2] + 15, highlight * 70);
+            ellipse(moveX - 2, 3 + moveY, hlSize, hlSize * 1.02);
+        }
+        
+        // 외부 글로우
+        if (fusion > 0.7) {
+            let glow = (fusion - 0.7) / 0.3;
+            fill(color[0], color[1], color[2], glow * 25);
+            ellipse(moveX, 6 + moveY, finalSize * 1.2, finalSize * 1.25);
+        }
+    }
+    
+    pop();
+}
+
+function drawOrganicBloom(crystal, color, progress) {
+    push();
+    
+    // 7단계로 더 세분화하여 부드러운 연결
+    let phase1 = constrain(map(progress, 0, 0.15, 0, 1), 0, 1);      // 발아
+    let phase2 = constrain(map(progress, 0.1, 0.3, 0, 1), 0, 1);     // 초기성장  
+    let phase3 = constrain(map(progress, 0.25, 0.5, 0, 1), 0, 1);    // 중기성장
+    let phase4 = constrain(map(progress, 0.45, 0.7, 0, 1), 0, 1);    // 개화
+    let phase5 = constrain(map(progress, 0.65, 0.85, 0, 1), 0, 1);   // 완성
+    let phase6 = constrain(map(progress, 0.8, 0.95, 0, 1), 0, 1);    // 성숙
+    let phase7 = constrain(map(progress, 0.9, 1, 0, 1), 0, 1);       // 변화
+    
+    // 전체적인 유기적 움직임 - 크기 제한
+    let globalRotation = progress * 15 + 
+                        sin(frameCount * 0.015) * 6 + 
+                        cos(frameCount * 0.012) * 3;
+    rotate(radians(globalRotation));
+    
+    // 전체 스케일 - 원본 크기 유지하면서 미세한 호흡
+    let globalScale = 0.85 + sin(frameCount * 0.025) * 0.08 + 
+                     cos(frameCount * 0.018) * 0.05;
+    scale(globalScale);
+    
+    // 배경 미세 파티클들 (더 많고 작게)
+    if (phase2 > 0) {
+        drawMicroParticles(color, phase2, phase3, phase4);
+    }
+    
+    // 중심 에너지 코어 (지속적으로 진화)
+    drawEvolvingCore(color, phase1, phase2, phase3, phase4, phase5, phase6, phase7);
+    
+    // 내부 에너지 링 (Phase 1부터)
+    if (phase1 > 0) {
+        drawEnergyRings(color, phase1, phase2, phase3);
+    }
+    
+    // 메인 꽃잎 시스템 - 4개 레이어, 크기 제한
+    for (let layer = 0; layer < 4; layer++) {
+        let layerDelay = layer * 0.08; // 더 촘촘한 타이밍
+        let layerProgress = constrain(progress - layerDelay, 0, 1);
+        
+        if (layerProgress <= 0) continue;
+        
+        push();
+        
+        // 각 레이어별 유기적 회전
+        let layerRotSpeed = 0.008 + layer * 0.003;
+        let layerRotation = frameCount * layerRotSpeed + layer * 12 + 
+                           sin(frameCount * 0.01 + layer) * 4;
+        rotate(radians(layerRotation));
+        
+        let petalCount = 10 - layer; // 10, 9, 8, 7개
+        
+        for (let i = 0; i < petalCount; i++) {
+            push();
+            
+            // 더 복잡하고 연결된 각도 시스템
+            let baseAngle = i * (360 / petalCount);
+            let neighborInfluence = sin(i * 0.8 + frameCount * 0.02) * 
+                                   cos((i-1) * 0.6 + frameCount * 0.015) * 5;
+            let layerInfluence = sin(layer * 0.4 + frameCount * 0.01) * 3;
+            let globalFlow = cos(frameCount * 0.008 + i * 0.3) * 2;
+            
+            let organicWave = neighborInfluence + layerInfluence + globalFlow;
+            let angle = baseAngle + organicWave * (1.2 - layerProgress * 0.3);
+            
+            // 개별 요소들의 상호 연결된 타이밍
+            let selfTiming = sin(i * 0.9 + layer * 0.5) * 0.15;
+            let neighborTiming = cos((i + layer) * 0.7) * 0.1;
+            let globalTiming = sin(progress * PI + layer) * 0.05;
+            
+            let adjustedProgress = constrain(layerProgress + selfTiming + 
+                                           neighborTiming + globalTiming, 0, 1);
+            
+            // 거리 계산 - 크기 제한하면서 역동적
+            let baseDistance = 12 + layer * 6; // 원본보다 작게
+            let phaseDistance = 0;
+            
+            if (phase1 > 0) phaseDistance += easeInOutQuart(phase1) * baseDistance * 0.2;
+            if (phase2 > 0) phaseDistance += easeInOutCubic(phase2) * baseDistance * 0.4;
+            if (phase3 > 0) phaseDistance += easeOutBounce(phase3) * baseDistance * 0.3;
+            if (phase4 > 0) phaseDistance += phase4 * baseDistance * 0.1;
+            
+            // 다중 진동 효과 (서로 연결됨)
+            let mainPulse = sin(frameCount * 0.025 + i * 0.4 + layer) * 0.12;
+            let subPulse = cos(frameCount * 0.035 + i * 0.6 - layer) * 0.08;
+            let microPulse = sin(frameCount * 0.045 + i * 0.2) * 0.04;
+            let breathEffect = (mainPulse + subPulse + microPulse) + 1;
+            
+            phaseDistance *= breathEffect;
+            
+            // 꽃잎 크기 - 제한하면서 다양성
+            let basePetalLength = 25 + layer * 8 + sin(i * 0.6 + layer) * 6;
+            let basePetalWidth = 10 + layer * 4 + cos(i * 0.8 - layer) * 3;
+            
+            // 단계별 성장 곡선
+            let growthCurve = adjustedProgress;
+            if (phase3 > 0) growthCurve *= (1 + phase3 * 0.2);
+            if (phase5 > 0) growthCurve *= (1 + sin(phase5 * PI) * 0.15);
+            
+            let petalLength = basePetalLength * growthCurve;
+            let petalWidth = basePetalWidth * growthCurve;
+            
+            // 복합적인 기울임과 비틀림
+            let baseTilt = sin(adjustedProgress * PI + i * 0.7 + layer * 0.3) * 12;
+            let dynamicTilt = cos(frameCount * 0.02 + i * 0.5) * 4;
+            let layerTilt = sin(frameCount * 0.015 + layer) * 2;
+            let neighborTilt = cos(i * 0.9 + frameCount * 0.01) * 
+                              sin((i+1) * 0.8 + frameCount * 0.012) * 3;
+            
+            let totalTilt = baseTilt + dynamicTilt + layerTilt + neighborTilt;
+            
+            // Phase 6-7에서 내향적 수렴
+            if (phase6 > 0) {
+                let convergence = phase6 * 0.2;
+                totalTilt += (180 - angle) * convergence * 0.1;
+                phaseDistance *= (1 - convergence * 0.3);
+            }
+            
+            // 3D 깊이와 원근감
+            let baseDepth = 1 + sin(adjustedProgress * PI + i * 0.5) * 0.12;
+            let dynamicDepth = cos(frameCount * 0.02 + i * 0.3 + layer) * 0.06;
+            let finalDepth = baseDepth + dynamicDepth;
+            
+            rotate(radians(angle + totalTilt));
+            scale(finalDepth, 1 + sin(frameCount * 0.01 + i) * 0.03);
+            translate(0, -phaseDistance);
+            
+            // 진화하는 색상 시스템
+            let timeColor = frameCount * 0.5;
+            let layerHue = layer * 8;
+            let positionHue = i * 3;
+            let phaseHue = progress * 20;
+            
+            let dynamicR = sin(timeColor * 0.01 + i * 0.1) * 10;
+            let dynamicG = cos(timeColor * 0.012 + layer * 0.2) * 8;
+            let dynamicB = sin(timeColor * 0.008 + i * 0.15 + layer * 0.1) * 12;
+            
+            let petalColor = [
+                constrain(color[0] + layerHue + dynamicR, 0, 255),
+                constrain(color[1] + phaseHue + dynamicG - layerHue * 0.3, 0, 255),
+                constrain(color[2] + positionHue + dynamicB + phase7 * 15, 0, 255)
+            ];
+            
+            // 알파 값 - 레이어 블렌딩
+            let baseAlpha = 180 - layer * 25;
+            let phaseAlpha = phase4 * 40 + phase5 * 20;
+            let centerAlpha = baseAlpha + phaseAlpha;
+            let edgeAlpha = (120 + layer * 15 + phase3 * 30) * (1 + phase6 * 0.3);
+            
+            drawAdvancedPetal(petalColor, petalLength, petalWidth, 
+                            centerAlpha, edgeAlpha, i, layer, adjustedProgress, phase7);
+            
+            pop();
+        }
+        
+        pop();
+    }
+    
+    // 중간 연결 요소들
+    if (phase3 > 0) {
+        drawConnectiveElements(color, phase3, phase4, phase5);
+    }
+    
+    // 동적 에너지 필드 (Phase 4부터)
+    if (phase4 > 0) {
+        drawEnergyField(color, phase4, phase5, phase6);
+    }
+    
+    // 외부 공명 패턴 (Phase 5부터)
+    if (phase5 > 0) {
+        drawResonancePattern(color, phase5, phase6, phase7);
+    }
+    
+    // 전이 효과 (Phase 7)
+    if (phase7 > 0) {
+        drawTransitionEffects(color, phase7);
+    }
+    
+    pop();
+}
+
+function drawMicroParticles(color, phase2, phase3, phase4) {
+    let particleCount = 35;
+    for (let i = 0; i < particleCount; i++) {
+        push();
+        
+        let baseAngle = i * (360 / particleCount);
+        let orbitRadius = 45 + sin(frameCount * 0.03 + i) * 15;
+        let spiralOffset = frameCount * (1 + i * 0.1) * 0.8;
+        let angle = baseAngle + spiralOffset;
+        
+        let x = cos(radians(angle)) * orbitRadius;
+        let y = sin(radians(angle)) * orbitRadius;
+        
+        // 개별 진동
+        x += sin(frameCount * 0.08 + i * 0.3) * 3;
+        y += cos(frameCount * 0.06 + i * 0.4) * 2;
+        
+        translate(x, y);
+        
+        let size = (1.5 + sin(frameCount * 0.12 + i) * 0.8) * phase2;
+        let alpha = (120 + cos(frameCount * 0.05 + i) * 40) * phase2 * (1 + phase3 * 0.4);
+        
+        fill(color[0] + 25, color[1] + 15, color[2] - 5, alpha);
+        noStroke();
+        ellipse(0, 0, size, size);
+        
+        // 연결선 효과
+        if (phase4 > 0 && i % 3 === 0) {
+            stroke(color[0] + 40, color[1] + 20, color[2] + 10, 60 * phase4);
+            strokeWeight(0.8);
+            line(0, 0, -x * 0.3, -y * 0.3);
+        }
+        
+        pop();
+    }
+}
+
+function drawEvolvingCore(color, p1, p2, p3, p4, p5, p6, p7) {
+    push();
+    
+    // 다층 코어 시스템
+    for (let coreLayer = 0; coreLayer < 5; coreLayer++) {
+        push();
+        
+        let layerScale = 1 - coreLayer * 0.15;
+        let layerRotation = frameCount * (0.8 + coreLayer * 0.3) + coreLayer * 20;
+        rotate(radians(layerRotation));
+        
+        // 각 단계별 크기 진화
+        let baseSize = 6 + coreLayer * 3;
+        let phaseSize = baseSize;
+        
+        if (p1 > 0) phaseSize *= (0.3 + p1 * 0.7);
+        if (p2 > 0) phaseSize *= (1 + p2 * 0.3);
+        if (p4 > 0) phaseSize *= (1 + p4 * 0.2);
+        if (p6 > 0) phaseSize *= (1 + sin(p6 * PI) * 0.25);
+        
+        // 동적 밝기
+        let brightness = 30 + coreLayer * 15;
+        if (p3 > 0) brightness += p3 * 25;
+        if (p5 > 0) brightness += p5 * 20;
+        if (p7 > 0) brightness += sin(p7 * PI * 2) * 30;
+        
+        fill(Math.min(255, color[0] + brightness),
+             Math.min(255, color[1] + brightness * 0.8),
+             Math.min(255, color[2] + brightness * 0.6),
+             200 - coreLayer * 25);
+        
+        // 형태 진화
+        if (p7 > 0.3) {
+            // 복잡한 형태로 변화
+            beginShape();
+            for (let angle = 0; angle < 360; angle += 12) {
+                let radius = phaseSize * layerScale;
+                let var1 = sin(angle * 0.4 + frameCount * 0.02 + coreLayer) * 2;
+                let var2 = cos(angle * 0.6 + frameCount * 0.015) * 1.5;
+                radius += (var1 + var2) * p7;
+                
+                let x = cos(radians(angle)) * radius;
+                let y = sin(radians(angle)) * radius;
+                vertex(x, y);
+            }
+            endShape(CLOSE);
+        } else {
+            // 펄스 효과
+            let pulse = 1 + sin(frameCount * 0.04 + coreLayer) * 0.1;
+            ellipse(0, 0, phaseSize * layerScale * pulse, phaseSize * layerScale * pulse);
+        }
+        
+        pop();
+    }
+    
+    pop();
+}
+
+function drawEnergyRings(color, phase1, phase2, phase3) {
+    push();
+    
+    let ringCount = 3;
+    for (let ring = 0; ring < ringCount; ring++) {
+        push();
+        
+        let ringRadius = 20 + ring * 12;
+        let ringRotation = frameCount * (0.5 + ring * 0.2) + ring * 45;
+        rotate(radians(ringRotation));
+        
+        let segmentCount = 8 + ring * 2;
+        let segmentSize = (2 + ring) * phase1 * (1 + phase2 * 0.5);
+        
+        for (let seg = 0; seg < segmentCount; seg++) {
+            push();
+            
+            let segAngle = seg * (360 / segmentCount);
+            rotate(radians(segAngle));
+            translate(0, -ringRadius);
+            
+            let alpha = (100 + ring * 30) * phase1 * (1 + phase3 * 0.6);
+            fill(color[0] + ring * 20, color[1] + ring * 10, color[2] - ring * 5, alpha);
+            
+            let dynamicSize = segmentSize * (1 + sin(frameCount * 0.06 + seg + ring) * 0.3);
+            ellipse(0, 0, dynamicSize, dynamicSize);
+            
+            pop();
+        }
+        
+        pop();
+    }
+    
+    pop();
+}
+
+function drawAdvancedPetal(petalColor, petalLength, petalWidth, centerAlpha, edgeAlpha, index, layer, progress, phase7) {
+    // 다층 그라데이션 꽃잎
+    for (let subLayer = 0; subLayer < 4; subLayer++) {
+        let layerScale = 1 - subLayer * 0.15;
+        let layerAlpha = (centerAlpha - subLayer * 30) * layerScale;
+        
+        fill(petalColor[0] + subLayer * 12, 
+             petalColor[1] + subLayer * 8, 
+             petalColor[2] - subLayer * 4, 
+             layerAlpha);
+        
+        noStroke();
+        
+        // 고도로 유기적인 꽃잎 모양
+        beginShape();
+        vertex(0, 0);
+        
+        let segments = 16;
+        for (let seg = 0; seg <= segments; seg++) {
+            let t = seg / segments;
+            let baseX = lerp(-petalWidth/2, petalWidth/2, Math.abs(t - 0.5) * 2) * layerScale;
+            let baseY = -petalLength * sin(t * PI) * layerScale;
+            
+            // 5개의 서로 다른 파형이 결합
+            let wave1 = sin(t * PI * 5 + frameCount * 0.04 + index) * 1.5;
+            let wave2 = cos(t * PI * 7 + frameCount * 0.03 + layer) * 1;
+            let wave3 = sin(t * PI * 3 + frameCount * 0.05) * 0.8;
+            let wave4 = cos(t * PI * 9 + frameCount * 0.025 + index * 0.5) * 0.6;
+            let wave5 = sin(t * PI * 11 + frameCount * 0.035) * 0.4;
+            
+            let totalWave = (wave1 + wave2 + wave3 + wave4 + wave5) * progress * (1 - subLayer * 0.2);
+            baseX += totalWave;
+            
+            // 끝부분 정밀 조정
+            if (t > 0.7) {
+                let tipFactor = map(t, 0.7, 1, 1, 0.2 + phase7 * 0.3);
+                baseX *= tipFactor;
+            }
+            
+            // 미세한 들쭉날쭉함
+            let microVariation = sin(t * PI * 20 + frameCount * 0.1 + index + layer) * 0.3 * progress;
+            baseX += microVariation;
+            
+            vertex(baseX, baseY);
+        }
+        endShape(CLOSE);
+    }
+    
+    // 복수 하이라이트 시스템
+    if (progress > 0.4) {
+        for (let highlight = 0; highlight < 5; highlight++) {
+            let hPos = 0.3 + highlight * 0.15;
+            let hSize = petalWidth * (0.08 + highlight * 0.02);
+            let hAlpha = edgeAlpha * 0.4 * (1 - highlight * 0.15);
+            
+            fill(Math.min(255, petalColor[0] + 50 + highlight * 10), 
+                 Math.min(255, petalColor[1] + 40 + highlight * 8), 
+                 Math.min(255, petalColor[2] + 30 + highlight * 6), 
+                 hAlpha);
+            
+            let hX = sin(highlight * 0.8 + frameCount * 0.08) * petalWidth * 0.15;
+            let hY = -petalLength * hPos;
+            ellipse(hX, hY, hSize, hSize);
+        }
+    }
+}
+
+function drawConnectiveElements(color, phase3, phase4, phase5) {
+    push();
+    
+    // 꽃잎들을 연결하는 에너지 스트림
+    let streamCount = 12;
+    for (let i = 0; i < streamCount; i++) {
+        push();
+        
+        let angle = i * 30 + frameCount * 0.8;
+        rotate(radians(angle));
+        
+        noFill();
+        stroke(color[0] + 30, color[1] + 20, color[2] + 10, 80 * phase3 * (1 + phase4 * 0.5));
+        strokeWeight(1 + phase5 * 0.8);
+        
+        beginShape();
+        for (let point = 0; point < 8; point++) {
+            let t = point / 7;
+            let radius = lerp(8, 35, t);
+            let waveOffset = sin(t * PI * 2 + frameCount * 0.06 + i) * 4;
+            
+            let x = (radius + waveOffset) * cos(radians(t * 30));
+            let y = -(radius + waveOffset) * sin(radians(t * 30));
+            
+            if (point === 0) {
+                curveVertex(x, y);
+            }
+            curveVertex(x, y);
+            if (point === 7) {
+                curveVertex(x, y);
+            }
+        }
+        endShape();
+        
+        pop();
+    }
+    
+    pop();
+}
+
+function drawEnergyField(color, phase4, phase5, phase6) {
+    push();
+    
+    // 동적 에너지 필드
+    let fieldPoints = 24;
+    for (let i = 0; i < fieldPoints; i++) {
+        push();
+        
+        let angle = i * (360 / fieldPoints) + frameCount * 0.6;
+        let baseRadius = 50;
+        let radiusVar = sin(frameCount * 0.04 + i * 0.3) * 8;
+        let radius = baseRadius + radiusVar;
+        
+        let x = cos(radians(angle)) * radius;
+        let y = sin(radians(angle)) * radius;
+        
+        translate(x, y);
+        
+        let fieldSize = (2 + sin(frameCount * 0.1 + i) * 1) * phase4;
+        let fieldAlpha = 60 * phase4 * (1 + phase5 * 0.7);
+        
+        fill(color[0] + 40, color[1] + 25, color[2] + 15, fieldAlpha);
+        ellipse(0, 0, fieldSize, fieldSize);
+        
+        // 연결선
+        if (phase6 > 0) {
+            stroke(color[0] + 50, color[1] + 30, color[2] + 20, 40 * phase6);
+            strokeWeight(0.8);
+            let nextI = (i + 1) % fieldPoints;
+            let nextAngle = nextI * (360 / fieldPoints) + frameCount * 0.6;
+            let nextX = cos(radians(nextAngle)) * (baseRadius + sin(frameCount * 0.04 + nextI * 0.3) * 8);
+            let nextY = sin(radians(nextAngle)) * (baseRadius + sin(frameCount * 0.04 + nextI * 0.3) * 8);
+            line(0, 0, nextX - x, nextY - y);
+        }
+        
+        pop();
+    }
+    
+    pop();
+}
+
+function drawResonancePattern(color, phase5, phase6, phase7) {
+    push();
+    
+    // 공명 패턴
+    let resonanceRings = 4;
+    for (let ring = 0; ring < resonanceRings; ring++) {
+        push();
+        
+        let ringRadius = 60 + ring * 15;
+        let ringRotation = frameCount * (0.3 + ring * 0.1) * (1 + phase6 * 0.5);
+        rotate(radians(ringRotation));
+        
+        noFill();
+        stroke(color[0] + ring * 10, color[1] + ring * 5, color[2] - ring * 3, 
+               (40 - ring * 8) * phase5 * (1 + phase7 * 0.8));
+        strokeWeight(1 + ring * 0.3);
+        
+        beginShape();
+        for (let angle = 0; angle < 360; angle += 8) {
+            let radius = ringRadius;
+            let resonance = sin(angle * 0.1 + frameCount * 0.02 + ring) * 5 * phase5;
+            radius += resonance;
+            
+            let x = cos(radians(angle)) * radius;
+            let y = sin(radians(angle)) * radius;
+            vertex(x, y);
+        }
+        endShape(CLOSE);
+        
+        pop();
+    }
+    
+    pop();
+}
+
+function drawTransitionEffects(color, phase7) {
+    push();
+    
+    // 전이 효과 - 다음 형태로의 변환 준비
+    let transitionCount = 16;
+    for (let i = 0; i < transitionCount; i++) {
+        push();
+        
+        let angle = i * (360 / transitionCount) + frameCount * 2;
+        let distance = 30 + sin(frameCount * 0.05 + i) * 20;
+        
+        let x = cos(radians(angle)) * distance;
+        let y = sin(radians(angle)) * distance;
+        
+        translate(x, y);
+        rotate(radians(angle + frameCount * 3));
+        
+        let size = 3 * phase7 * (1 + sin(frameCount * 0.12 + i) * 0.5);
+        let alpha = 120 * phase7;
+        
+        fill(color[0] + 60, color[1] + 40, color[2] + 20, alpha);
+        
+        // 작은 나선형
+        beginShape();
+        for (let spiralAngle = 0; spiralAngle < 180; spiralAngle += 30) {
+            let spiralRadius = size * (spiralAngle / 180);
+            let sx = cos(radians(spiralAngle)) * spiralRadius;
+            let sy = sin(radians(spiralAngle)) * spiralRadius;
+            vertex(sx, sy);
+        }
+        endShape();
+        
+        pop();
+    }
+    
+    pop();
+}
+
+// 개선된 이징 함수들
+function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function easeInOutQuart(t) {
+    return t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
+}
+
+function easeOutBounce(t) {
+    const n1 = 7.5625;
+    const d1 = 2.75;
+    
+    if (t < 1 / d1) {
+        return n1 * t * t;
+    } else if (t < 2 / d1) {
+        return n1 * (t -= 1.5 / d1) * t + 0.75;
+    } else if (t < 2.5 / d1) {
+        return n1 * (t -= 2.25 / d1) * t + 0.9375;
+    } else {
+        return n1 * (t -= 2.625 / d1) * t + 0.984375;
+    }
+}
+
+        function drawSpiralConvergence(crystal, color, progress) {
+            // 안전성 체크
+            if (!crystal || !color || progress < 0 || progress > 1) {
+                return;
+            }
+            
+            push();
+            
+            try {
+                let spiralEase = easeInOutQuart(progress);
+                
+                // Phase 2에서 이어받은 요소들을 초반에 유지
+                let inheritancePhase = progress < 0.3 ? map(progress, 0, 0.3, 1, 0) : 0;
+                
+                // Phase 2의 꽃잎 잔재 (초반에만 표시)
+                if (inheritancePhase > 0) {
+                    for (let i = 0; i < 8; i++) {
+                        push();
+                        
+                        let angle = i * 45;
+                        let distance = 15 * inheritancePhase;
+                        let size = 10 * inheritancePhase;
+                        
+                        rotate(radians(angle));
+                        translate(0, -distance);
+                        
+                        fill(color[0] + 20, color[1] + 15, color[2] - 5, 100 * inheritancePhase);
+                        ellipse(0, 0, size, size);
+                        
+                        pop();
+                    }
+                }
+                
+                // 메인 나선 수렴 효과 (0.2-0.4 구간으로 단축)
+                let mainProgress = progress > 0.2 && progress < 0.4 ? 
+                    map(progress, 0.2, 0.4, 0, 1) : 0;
+                
+                if (mainProgress > 0) {
+                    let particleCount = Math.floor(constrain(lerp(8, 12, mainProgress), 1, 20));
+                    
+                    for (let i = 0; i < particleCount; i++) {
+                        push();
+                        
+                        let baseAngle = (i / particleCount) * 360;
+                        let spiralAngle = baseAngle + mainProgress * 180 * (i % 2 === 0 ? 1 : -1);
+                        let distance = lerp(45, 8, easeInOutCubic(mainProgress));
+                        let size = lerp(15, 25, mainProgress);
+                        
+                        let yRotation = spiralAngle * 0.5 + frameCount * 0.5;
+                        let scaleX = 1 + cos(radians(yRotation)) * 0.12;
+                        let scaleY = 1 + sin(radians(yRotation)) * 0.08;
+                        
+                        let x = cos(radians(spiralAngle)) * distance;
+                        let y = sin(radians(spiralAngle)) * distance;
+                        
+                        translate(x, y);
+                        rotate(radians(spiralAngle * 0.2));
+                        scale(scaleX, scaleY);
+                        
+                        let rotationColor = [
+                            constrain(color[0] + sin(spiralAngle * PI/180) * 20, 0, 255),
+                            constrain(color[1] + cos(spiralAngle * PI/180) * 15, 0, 255),
+                            constrain(color[2] + sin(spiralAngle * PI/180 + PI/3) * 10, 0, 255)
+                        ];
+                        
+                        fill(rotationColor[0], rotationColor[1], rotationColor[2], 
+                             constrain(150 + mainProgress * 60, 0, 255));
+                        noStroke();
+                        
+                        beginShape();
+                        for (let angle = 0; angle < 360; angle += 25) {
+                            let radius = size * 0.5;
+                            let organicVariation = sin(angle * 0.15 + frameCount * 0.04 + i) * 1.5;
+                            radius += organicVariation;
+                            
+                            let px = cos(radians(angle)) * radius;
+                            let py = sin(radians(angle)) * radius;
+                            vertex(px, py);
+                        }
+                        endShape(CLOSE);
+                        
+                        pop();
+                    }
+                }
+                
+                // 아이스크림으로의 변형 과정 (0.4-1.0 구간) - Phase 4와 정확히 일치!
+                if (progress > 0.4) {
+                    let iceCreamProgress = constrain(map(progress, 0.4, 1, 0, 1), 0, 1);
+                    let scale = 0.7; // drawStrawberryIceCream과 동일
+                    
+                    // Phase 4에서 사용하는 것과 동일한 투명도 계산
+                    let safeProgress = Math.max(0.3, iceCreamProgress);
+                    let finalAlpha = progress >= 0.9 ? 1.0 : constrain(0.6 + iceCreamProgress * 0.4, 0.6, 1.0);
+                    
+                    // 1. 컵 부분 - drawStrawberryIceCream과 정확히 동일한 로직
+                    let cupProgress = safeProgress > 0.1 ? map(safeProgress, 0.1, 0.4, 0, 1) : 0.7;
+                    
+                    // 초록색 컵 베이스 - 좌표와 색상 정확히 일치
+                    fill(77, 255, 168, constrain(255 * cupProgress * finalAlpha, 0, 255));
+                    noStroke();
+                    
+                    beginShape();
+                    vertex(-55 * scale, 20 * scale);      // 왼쪽 상단
+                    vertex(55 * scale, 20 * scale);       // 오른쪽 상단  
+                    vertex(35 * scale, 80 * scale);       // 오른쪽 하단
+                    vertex(-35 * scale, 80 * scale);      // 왼쪽 하단
+                    endShape(CLOSE);
+                    
+                    // 줄무늬 - drawStrawberryIceCream과 정확히 동일
+                    push();
+                    
+                    if (typeof drawingContext !== 'undefined' && drawingContext.save) {
+                        drawingContext.save();
+                        
+                        beginShape();
+                        vertex(-55 * scale, 20 * scale);
+                        vertex(55 * scale, 20 * scale);
+                        vertex(35 * scale, 80 * scale);
+                        vertex(-35 * scale, 80 * scale);
+                        endShape();
+                        
+                        if (drawingContext.clip) {
+                            drawingContext.clip();
+                        }
+                        
+                        fill(100, 149, 237, constrain(255 * cupProgress * finalAlpha, 0, 255));
+                        let stripeWidth = 5.75 * scale;
+                        let stripeSpacing = 14.7 * scale;
+                        
+                        for (let i = -8; i < 10; i++) {
+                            push();
+                            translate(i * stripeSpacing - 50 * scale, -50 * scale);
+                            rotate(radians(-17.5));
+                            rect(0, 0, stripeWidth, 300 * scale);
+                            pop();
+                        }
+                        
+                        if (drawingContext.restore) {
+                            drawingContext.restore();
+                        }
+                    }
+                    
+                    pop();
+                    
+                    // 2. 스쿱들 - drawStrawberryIceCream과 정확히 동일한 형태와 좌표
+                    let scoopProgress = safeProgress > 0.3 ? map(safeProgress, 0.3, 0.8, 0, 1) : 0.6;
+                    
+                    // 첫 번째 스쿱 (Cornflower Blue) - 좌표와 형태 정확히 일치
+                    push();
+                    fill(100, 149, 237, constrain(255 * scoopProgress * finalAlpha, 0, 255));
+                    noStroke();
+                    
+                    // drawStrawberryIceCream과 정확히 동일한 좌표
+                    beginShape();
+                    curveVertex(-55 * scale, 12 * scale);
+                    curveVertex(-58 * scale, 12 * scale);
+                    curveVertex(-52 * scale, -5 * scale);
+                    curveVertex(-30 * scale, -18 * scale);
+                    curveVertex(-42 * scale, -25 * scale);
+                    curveVertex(-38 * scale, -32 * scale);
+                    curveVertex(-32 * scale, -38 * scale);
+                    curveVertex(-25 * scale, -42 * scale);
+                    curveVertex(-18 * scale, -44 * scale);
+                    curveVertex(-10 * scale, -46 * scale);
+                    curveVertex(-2 * scale, -45 * scale);
+                    curveVertex(5 * scale, -42 * scale);
+                    curveVertex(10 * scale, -38 * scale);
+                    curveVertex(14 * scale, -32 * scale);
+                    curveVertex(17 * scale, -25 * scale);
+                    curveVertex(19 * scale, -18 * scale);
+                    curveVertex(22 * scale, -10 * scale);
+                    curveVertex(23 * scale, -2 * scale);
+                    curveVertex(22 * scale, 5 * scale);
+                    curveVertex(20 * scale, 12 * scale);
+                    curveVertex(16 * scale, 17 * scale);
+                    curveVertex(10 * scale, 20 * scale);
+                    curveVertex(2 * scale, 22 * scale);
+                    curveVertex(-8 * scale, 21 * scale);
+                    curveVertex(-18 * scale, 20 * scale);
+                    curveVertex(-28 * scale, 19 * scale);
+                    curveVertex(-38 * scale, 17 * scale);
+                    curveVertex(-45 * scale, 15 * scale);
+                    curveVertex(-55 * scale, 12 * scale);
+                    curveVertex(-55 * scale, 12 * scale);
+                    endShape();
+                    pop();
+                    
+                    // 두 번째 스쿱 (Yellow) - drawStrawberryIceCream과 정확히 동일
+                    if (scoopProgress > 0.4 || safeProgress >= 0.3) {
+                        let yellowProgress = scoopProgress > 0.4 ? map(scoopProgress, 0.4, 1, 0, 1) : 0.5;
+                        
+                        push();
+                        
+                        if (typeof drawingContext !== 'undefined' && drawingContext.globalCompositeOperation) {
+                            drawingContext.globalCompositeOperation = 'multiply';
+                        }
+                        
+                        fill(255, 255, 100, constrain(200 * yellowProgress * finalAlpha, 0, 255));
+                        noStroke();
+                        
+                        // drawStrawberryIceCream과 정확히 동일한 좌표
+                        beginShape();
+                        curveVertex(-20 * scale, 10 * scale);
+                        curveVertex(-18 * scale, 5 * scale);
+                        curveVertex(-12 * scale, 1 * scale);
+                        curveVertex(-9 * scale, -5 * scale);
+                        curveVertex(-10 * scale, -7 * scale);
+                        curveVertex(-22 * scale, -15 * scale);
+                        curveVertex(-20 * scale, -25 * scale);
+                        curveVertex(-15 * scale, -32 * scale);
+                        curveVertex(-8 * scale, -35 * scale);
+                        curveVertex(0 * scale, -37 * scale);
+                        curveVertex(5 * scale, -36 * scale);
+                        curveVertex(8 * scale, -33 * scale);
+                        curveVertex(15 * scale, -35 * scale);
+                        curveVertex(25 * scale, -38 * scale);
+                        curveVertex(35 * scale, -37 * scale);
+                        curveVertex(42 * scale, -33 * scale);
+                        curveVertex(48 * scale, -25 * scale);
+                        curveVertex(52 * scale, -15 * scale);
+                        curveVertex(53 * scale, -5 * scale);
+                        curveVertex(50 * scale, 5 * scale);
+                        curveVertex(45 * scale, 10 * scale);
+                        curveVertex(48 * scale, 15 * scale);
+                        curveVertex(45 * scale, 20 * scale);
+                        curveVertex(40 * scale, 22 * scale);
+                        curveVertex(32 * scale, 23 * scale);
+                        curveVertex(22 * scale, 22 * scale);
+                        curveVertex(12 * scale, 20 * scale);
+                        curveVertex(2 * scale, 18 * scale);
+                        curveVertex(-8 * scale, 17 * scale);
+                        curveVertex(-15 * scale, 15 * scale);
+                        curveVertex(-15 * scale, 15 * scale);
+                        endShape();
+                        
+                        if (typeof drawingContext !== 'undefined' && drawingContext.globalCompositeOperation) {
+                            drawingContext.globalCompositeOperation = 'source-over';
+                        }
+                        
+                        pop();
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error in drawSpiralConvergence:', error);
+                // 에러 발생 시 기본 원형 그리기
+                fill(color[0], color[1], color[2], 100);
+                ellipse(0, 0, 50, 50);
+            }
+            
+            pop();
+        }
+        function drawFluidMelt(crystal, color, progress) {
+    push();
+    
+    let meltEase = easeInOutCubic(progress);
+    
+    // 삼각형들이 서로 연결되어 변형되는 구조
+    let triangles = [
+        {x: -20, y: -25, size: 18, connections: [1, 2], phase: 0},
+        {x: 15, y: -20, size: 22, connections: [0, 3, 4], phase: 0.2},
+        {x: -10, y: 5, size: 20, connections: [0, 5], phase: 0.1},
+        {x: 25, y: 10, size: 16, connections: [1, 4], phase: 0.4},
+        {x: 0, y: 30, size: 24, connections: [1, 3, 5], phase: 0.3},
+        {x: -30, y: 15, size: 19, connections: [2, 4], phase: 0.5}
+    ];
+    
+    // 연결선들을 먼저 그려서 유기적 관계 표현
+    if (progress < 0.7) {
+        drawConnections(triangles, color, progress);
+    }
+    
+    for (let i = 0; i < triangles.length; i++) {
+        push();
+        
+        let tri = triangles[i];
+        let localProgress = constrain(progress - tri.phase * 0.3, 0, 1);
+        let morphFactor = easeInOutCubic(localProgress);
+        
+        // 더 복잡한 물리 시뮬레이션
+        let gravity = localProgress * localProgress * 25;
+        let viscosity = sin(frameCount * 0.03 + i * 1.2) * 4 * (1 - morphFactor * 0.5);
+        let turbulence = cos(frameCount * 0.07 + i * 0.8) * 2 * morphFactor;
+        
+        // 주변 삼각형들의 영향으로 위치 조정 (유기적 상호작용)
+        let influenceX = 0, influenceY = 0;
+        for (let conn of tri.connections) {
+            let connTri = triangles[conn];
+            let distance = dist(tri.x, tri.y, connTri.x, connTri.y);
+            let force = (100 - distance) * 0.02 * progress;
+            let angle = atan2(connTri.y - tri.y, connTri.x - tri.x);
+            influenceX += cos(angle) * force;
+            influenceY += sin(angle) * force;
+        }
+        
+        let currentX = tri.x + viscosity + turbulence + influenceX;
+        let currentY = tri.y + gravity * (1 + i * 0.08) + influenceY;
+        
+        translate(currentX, currentY);
+        rotate(sin(frameCount * 0.02 + i) * 0.1 * morphFactor);
+        
+        // 색상이 시간에 따라 유기적으로 변화
+        let colorShift = sin(frameCount * 0.05 + i * 0.7) * 10 * morphFactor;
+        let alpha = 180 + progress * 50 + sin(frameCount * 0.04 + i) * 20;
+        fill(
+            constrain(color[0] + colorShift, 0, 255), 
+            constrain(color[1] + colorShift * 0.5, 0, 255), 
+            constrain(color[2] + colorShift * 0.3, 0, 255), 
+            alpha
+        );
+        noStroke();
+        
+        if (morphFactor < 0.4) {
+            // 삼각형이 유기적으로 변형
+            drawOrganicTriangle(tri.size, morphFactor, i);
+        } else if (morphFactor < 0.8) {
+            // 전환 단계 - 복잡한 유기체 형태
+            drawTransitionBlob(tri.size, morphFactor, i);
+        } else {
+            // 최종 방울 형태
+            drawOrganicDrop(tri.size, morphFactor, i, progress);
+        }
+        
+        pop();
+    }
+    
+    pop();
+}
+
+function drawConnections(triangles, color, progress) {
+    if (progress > 0.6) return;
+    
+    stroke(color[0], color[1], color[2], 80 * (1 - progress * 1.5));
+    strokeWeight(2 * (1 - progress));
+    
+    for (let i = 0; i < triangles.length; i++) {
+        let tri = triangles[i];
+        for (let connIndex of tri.connections) {
+            if (connIndex > i) { // 중복 연결 방지
+                let connTri = triangles[connIndex];
+                
+                // 베지어 곡선으로 유기적인 연결선
+                let midX = (tri.x + connTri.x) / 2;
+                let midY = (tri.y + connTri.y) / 2;
+                let controlOffset = sin(frameCount * 0.03 + i + connIndex) * 15;
+                
+                bezier(
+                    tri.x, tri.y,
+                    midX + controlOffset, midY - abs(controlOffset) * 0.5,
+                    midX - controlOffset, midY + abs(controlOffset) * 0.5,
+                    connTri.x, connTri.y
+                );
+            }
+        }
+    }
+    noStroke();
+}
+
+function drawOrganicTriangle(size, morphFactor, index) {
+    let vertices = 3;
+    let baseRadius = size;
+    
+    beginShape();
+    for (let j = 0; j < vertices; j++) {
+        let angle = j * 120 - 90;
+        
+        // 각 꼭짓점이 독립적으로 변형
+        let radiusVariation = sin(frameCount * 0.04 + j * 2 + index) * 3 * morphFactor;
+        let radius = baseRadius + radiusVariation;
+        
+        // 모서리가 점진적으로 둥글어짐
+        let roundness = morphFactor * 1.5;
+        radius *= (1 + roundness * 0.2);
+        
+        let x = cos(radians(angle)) * radius;
+        let y = sin(radians(angle)) * radius;
+        
+        if (morphFactor > 0.1) {
+            // 베지어로 유기적 곡선 생성
+            let nextJ = (j + 1) % vertices;
+            let nextAngle = nextJ * 120 - 90;
+            let nextRadius = baseRadius + sin(frameCount * 0.04 + nextJ * 2 + index) * 3 * morphFactor;
+            nextRadius *= (1 + roundness * 0.2);
+            
+            let nextX = cos(radians(nextAngle)) * nextRadius;
+            let nextY = sin(radians(nextAngle)) * nextRadius;
+            
+            let controlDistance = radius * (0.5 + roundness * 0.3);
+            let controlAngle = angle + 60;
+            let controlX = cos(radians(controlAngle)) * controlDistance;
+            let controlY = sin(radians(controlAngle)) * controlDistance;
+            
+            if (j === 0) vertex(x, y);
+            quadraticVertex(controlX, controlY, nextX, nextY);
+        } else {
+            vertex(x, y);
+        }
+    }
+    endShape(CLOSE);
+}
+
+function drawTransitionBlob(size, morphFactor, index) {
+    // 복잡한 유기체 중간 형태
+    let points = 12;
+    let baseRadius = size * 0.8;
+    
+    beginShape();
+    for (let i = 0; i < points; i++) {
+        let angle = i * (360 / points);
+        
+        // 여러 주파수의 파동이 결합된 복잡한 형태
+        let wave1 = sin(radians(angle * 3) + frameCount * 0.05 + index) * 4;
+        let wave2 = cos(radians(angle * 5) + frameCount * 0.03 + index * 1.5) * 2;
+        let wave3 = sin(radians(angle * 2) + frameCount * 0.07 + index * 0.7) * 3;
+        
+        let radius = baseRadius + wave1 + wave2 + wave3;
+        radius *= (1 + morphFactor * 0.3);
+        
+        let x = cos(radians(angle)) * radius;
+        let y = sin(radians(angle)) * radius;
+        vertex(x, y);
+    }
+    endShape(CLOSE);
+}
+
+function drawOrganicDrop(size, morphFactor, index, globalProgress) {
+    let dropSize = size * (0.9 + morphFactor * 0.3);
+    
+    // 물방울이 살아있는 것처럼 움직임
+    let pulseSize = sin(frameCount * 0.06 + index * 1.3) * 0.05 + 1;
+    let asymmetry = cos(frameCount * 0.04 + index * 0.9) * 0.1;
+    
+    beginShape();
+    for (let angle = 0; angle < 360; angle += 8) {
+        let radius = dropSize * 0.5 * pulseSize;
+        
+        // 물방울의 자연스러운 형태
+        if (angle > 150 && angle < 210) {
+            radius *= 1.15; // 아래쪽 볼록
+        } else if (angle > 30 && angle < 150) {
+            radius *= 0.95; // 옆면 약간 들어감
+        }
+        
+        // 미세한 표면 떨림
+        let surfaceTension = sin(angle * 4 + frameCount * 0.1 + index) * 0.02;
+        radius *= (1 + surfaceTension);
+        
+        let x = cos(radians(angle)) * radius * (1 + asymmetry);
+        let y = sin(radians(angle)) * radius * (1.05 - asymmetry * 0.5);
+        vertex(x, y);
+    }
+    endShape(CLOSE);
+    
+    // 동적 하이라이트
+    if (globalProgress > 0.3) {
+        let highlightIntensity = sin(frameCount * 0.08 + index) * 30 + 70;
+        fill(
+            Math.min(255, color[0] + highlightIntensity), 
+            Math.min(255, color[1] + highlightIntensity), 
+            Math.min(255, color[2] + highlightIntensity), 
+            120
+        );
+        
+        let highlightSize = dropSize * (0.25 + sin(frameCount * 0.05 + index) * 0.05);
+        let offsetX = -dropSize * 0.15 + cos(frameCount * 0.03 + index) * 2;
+        let offsetY = -dropSize * 0.2 + sin(frameCount * 0.04 + index) * 1;
+        
+        ellipse(offsetX, offsetY, highlightSize, highlightSize);
+    }
+}
+
+function drawSurfaceTension(crystal, color, progress) {
+    push();
+    
+    let tensionEase = easeInOutQuart(progress);
+    
+    // 방울들이 서로 끌어당기며 합쳐지는 복잡한 시스템
+    let drops = [
+        {angle: 0, distance: 35, size: 16, phase: 0},
+        {angle: 45, distance: 32, size: 18, phase: 0.1},
+        {angle: 90, distance: 38, size: 14, phase: 0.2},
+        {angle: 135, distance: 30, size: 20, phase: 0.05},
+        {angle: 180, distance: 33, size: 17, phase: 0.15},
+        {angle: 225, distance: 36, size: 15, phase: 0.25},
+        {angle: 270, distance: 31, size: 19, phase: 0.08},
+        {angle: 315, distance: 34, size: 16, phase: 0.18}
+    ];
+    
+    // 중심으로의 인력 계산
+    let centralMass = progress * 100;
+    
+    for (let i = 0; i < drops.length; i++) {
+        push();
+        
+        let drop = drops[i];
+        let localProgress = constrain(progress - drop.phase, 0, 1);
+        let attraction = easeInOutCubic(localProgress);
+        
+        // 복잡한 궤도 운동
+        let spiralFactor = sin(frameCount * 0.04 + i * 0.8) * 5 * (1 - attraction);
+        let currentDistance = lerp(drop.distance, 8, attraction);
+        currentDistance += spiralFactor;
+        
+        let currentAngle = drop.angle + sin(frameCount * 0.02 + i) * 10 * (1 - attraction);
+        
+        let x = cos(radians(currentAngle)) * currentDistance;
+        let y = sin(radians(currentAngle)) * currentDistance + 15;
+        
+        translate(x, y);
+        
+        // 방울 간 상호작용으로 크기 변화
+        let neighborInfluence = 0;
+        for (let j = 0; j < drops.length; j++) {
+            if (i !== j) {
+                let otherDrop = drops[j];
+                let otherX = cos(radians(otherDrop.angle)) * lerp(otherDrop.distance, 8, attraction);
+                let otherY = sin(radians(otherDrop.angle)) * lerp(otherDrop.distance, 8, attraction) + 15;
+                let distance = dist(x, y, otherX, otherY);
+                
+                if (distance < 20) {
+                    neighborInfluence += (20 - distance) * 0.01;
+                }
+            }
+        }
+        
+        let dropSize = drop.size * (1 - attraction * 0.4) * (1 + neighborInfluence);
+        
+        // 합쳐지는 과정에서의 변형
+        let stretchToCenter = attraction * 0.6;
+        let centerAngle = atan2(-y, -x);
+        let stretchX = 1 - stretchToCenter * 0.5;
+        let stretchY = 1 + stretchToCenter * 0.8;
+        
+        rotate(centerAngle * stretchToCenter);
+        scale(stretchX, stretchY);
+        
+        // 동적 색상 변화
+        let colorWave = sin(frameCount * 0.05 + i * 1.2) * 15;
+        let alpha = 160 + progress * 40 + colorWave;
+        fill(
+            constrain(color[0] + colorWave * 0.5, 0, 255),
+            constrain(color[1] + colorWave * 0.3, 0, 255),
+            constrain(color[2] + colorWave * 0.7, 0, 255),
+            alpha
+        );
+        
+        // 유기적 방울 형태
+        drawFluidDrop(dropSize / stretchX, dropSize / stretchY, i);
+        
+        pop();
+    }
+    
+    // 중앙 통합 덩어리 - 아이스크림으로 모핑
+    if (progress > 0.3) {
+        let centerProgress = map(progress, 0.3, 1, 0, 1);
+        
+        if (centerProgress < 0.7) {
+            // 초기: 살아있는 유기체 형태
+            let baseSize = lerp(25, 75, easeInOutCubic(centerProgress));
+            let pulse1 = sin(frameCount * 0.06) * 0.1 + 1;
+            let pulse2 = cos(frameCount * 0.04) * 0.05 + 1;
+            let centerSize = baseSize * pulse1 * pulse2;
+            
+            fill(color[0], color[1], color[2], 200 + centerProgress * 55);
+            
+            beginShape();
+            for (let angle = 0; angle < 360; angle += 10) {
+                let radius = centerSize * 0.5;
+                
+                // 점진적으로 3개 영역으로 분화
+                let morphToTriple = map(centerProgress, 0.4, 0.7, 0, 1);
+                morphToTriple = constrain(morphToTriple, 0, 1);
+                
+                // 3개 스쿱 위치 미리보기
+                let region = floor(angle / 120); // 0, 1, 2 영역
+                let regionCenter = region * 120 + 60; // 각 영역의 중심각
+                let distFromCenter = abs(angle - regionCenter);
+                if (distFromCenter > 60) distFromCenter = 120 - distFromCenter;
+                
+                let regionFactor = map(distFromCenter, 0, 60, 1.2, 0.8);
+                radius *= lerp(1, regionFactor, morphToTriple);
+                
+                let wave1 = sin(radians(angle * 2) + frameCount * 0.08) * 4;
+                let wave2 = cos(radians(angle * 3) + frameCount * 0.05) * 2;
+                let wave3 = sin(radians(angle * 5) + frameCount * 0.12) * 1;
+                
+                radius += (wave1 + wave2 + wave3) * (1 - centerProgress * 0.7);
+                
+                let x = cos(radians(angle)) * radius;
+                let y = sin(radians(angle)) * radius * 1.03;
+                vertex(x, y);
+            }
+            endShape(CLOSE);
+            
+        } else {
+            // 후기: 아이스크림 스쿱들로 변형 (완성 후 유지)
+            let morphProgress = map(centerProgress, 0.7, 1, 0, 1);
+            morphProgress = constrain(morphProgress, 0, 1); // 1에서 멈춤
+            drawIceCreamTransition(color, morphProgress);
+        }
+        
+        // 콘 형태로 변형되는 하단부 (완성 후 유지)
+        if (centerProgress > 0.6) {
+            let coneProgress = map(centerProgress, 0.6, 1, 0, 1);
+            coneProgress = constrain(coneProgress, 0, 1); // 1에서 멈춤
+            drawConeTransition(coneProgress);
+        }
+    }
+    
+    pop();
+}
+
+function drawFluidMelt(crystal, color, progress) {
+    push();
+    
+    let meltEase = easeInOutCubic(progress);
+    
+    // 삼각형들이 서로 연결되어 변형되는 구조
+    let triangles = [
+        {x: -20, y: -25, size: 18, connections: [1, 2], phase: 0},
+        {x: 15, y: -20, size: 22, connections: [0, 3, 4], phase: 0.2},
+        {x: -10, y: 5, size: 20, connections: [0, 5], phase: 0.1},
+        {x: 25, y: 10, size: 16, connections: [1, 4], phase: 0.4},
+        {x: 0, y: 30, size: 24, connections: [1, 3, 5], phase: 0.3},
+        {x: -30, y: 15, size: 19, connections: [2, 4], phase: 0.5}
+    ];
+    
+    // 연결선들을 먼저 그려서 유기적 관계 표현
+    if (progress < 0.7) {
+        drawConnections(triangles, color, progress);
+    }
+    
+    for (let i = 0; i < triangles.length; i++) {
+        push();
+        
+        let tri = triangles[i];
+        let localProgress = constrain(progress - tri.phase * 0.3, 0, 1);
+        let morphFactor = easeInOutCubic(localProgress);
+        
+        // 더 복잡한 물리 시뮬레이션
+        let gravity = localProgress * localProgress * 25;
+        let viscosity = sin(frameCount * 0.03 + i * 1.2) * 4 * (1 - morphFactor * 0.5);
+        let turbulence = cos(frameCount * 0.07 + i * 0.8) * 2 * morphFactor;
+        
+        // 주변 삼각형들의 영향으로 위치 조정 (유기적 상호작용)
+        let influenceX = 0, influenceY = 0;
+        for (let conn of tri.connections) {
+            let connTri = triangles[conn];
+            let distance = dist(tri.x, tri.y, connTri.x, connTri.y);
+            let force = (100 - distance) * 0.02 * progress;
+            let angle = atan2(connTri.y - tri.y, connTri.x - tri.x);
+            influenceX += cos(angle) * force;
+            influenceY += sin(angle) * force;
+        }
+        
+        let currentX = tri.x + viscosity + turbulence + influenceX;
+        let currentY = tri.y + gravity * (1 + i * 0.08) + influenceY;
+        
+        translate(currentX, currentY);
+        rotate(sin(frameCount * 0.02 + i) * 0.1 * morphFactor);
+        
+        // 색상이 시간에 따라 유기적으로 변화
+        let colorShift = sin(frameCount * 0.05 + i * 0.7) * 10 * morphFactor;
+        let alpha = 180 + progress * 50 + sin(frameCount * 0.04 + i) * 20;
+        fill(
+            constrain(color[0] + colorShift, 0, 255), 
+            constrain(color[1] + colorShift * 0.5, 0, 255), 
+            constrain(color[2] + colorShift * 0.3, 0, 255), 
+            alpha
+        );
+        noStroke();
+        
+        if (morphFactor < 0.4) {
+            // 삼각형이 유기적으로 변형
+            drawOrganicTriangle(tri.size, morphFactor, i);
+        } else if (morphFactor < 0.8) {
+            // 전환 단계 - 복잡한 유기체 형태
+            drawTransitionBlob(tri.size, morphFactor, i);
+        } else {
+            // 최종 방울 형태
+            drawOrganicDrop(tri.size, morphFactor, i, progress);
+        }
+        
+        pop();
+    }
+    
+    pop();
+}
+
+function drawConnections(triangles, color, progress) {
+    if (progress > 0.6) return;
+    
+    stroke(color[0], color[1], color[2], 80 * (1 - progress * 1.5));
+    strokeWeight(2 * (1 - progress));
+    
+    for (let i = 0; i < triangles.length; i++) {
+        let tri = triangles[i];
+        for (let connIndex of tri.connections) {
+            if (connIndex > i) { // 중복 연결 방지
+                let connTri = triangles[connIndex];
+                
+                // 베지어 곡선으로 유기적인 연결선
+                let midX = (tri.x + connTri.x) / 2;
+                let midY = (tri.y + connTri.y) / 2;
+                let controlOffset = sin(frameCount * 0.03 + i + connIndex) * 15;
+                
+                bezier(
+                    tri.x, tri.y,
+                    midX + controlOffset, midY - abs(controlOffset) * 0.5,
+                    midX - controlOffset, midY + abs(controlOffset) * 0.5,
+                    connTri.x, connTri.y
+                );
+            }
+        }
+    }
+    noStroke();
+}
+
+function drawOrganicTriangle(size, morphFactor, index) {
+    let vertices = 3;
+    let baseRadius = size;
+    
+    beginShape();
+    for (let j = 0; j < vertices; j++) {
+        let angle = j * 120 - 90;
+        
+        // 각 꼭짓점이 독립적으로 변형
+        let radiusVariation = sin(frameCount * 0.04 + j * 2 + index) * 3 * morphFactor;
+        let radius = baseRadius + radiusVariation;
+        
+        // 모서리가 점진적으로 둥글어짐
+        let roundness = morphFactor * 1.5;
+        radius *= (1 + roundness * 0.2);
+        
+        let x = cos(radians(angle)) * radius;
+        let y = sin(radians(angle)) * radius;
+        
+        if (morphFactor > 0.1) {
+            // 베지어로 유기적 곡선 생성
+            let nextJ = (j + 1) % vertices;
+            let nextAngle = nextJ * 120 - 90;
+            let nextRadius = baseRadius + sin(frameCount * 0.04 + nextJ * 2 + index) * 3 * morphFactor;
+            nextRadius *= (1 + roundness * 0.2);
+            
+            let nextX = cos(radians(nextAngle)) * nextRadius;
+            let nextY = sin(radians(nextAngle)) * nextRadius;
+            
+            let controlDistance = radius * (0.5 + roundness * 0.3);
+            let controlAngle = angle + 60;
+            let controlX = cos(radians(controlAngle)) * controlDistance;
+            let controlY = sin(radians(controlAngle)) * controlDistance;
+            
+            if (j === 0) vertex(x, y);
+            quadraticVertex(controlX, controlY, nextX, nextY);
+        } else {
+            vertex(x, y);
+        }
+    }
+    endShape(CLOSE);
+}
+
+function drawTransitionBlob(size, morphFactor, index) {
+    // 복잡한 유기체 중간 형태
+    let points = 12;
+    let baseRadius = size * 0.8;
+    
+    beginShape();
+    for (let i = 0; i < points; i++) {
+        let angle = i * (360 / points);
+        
+        // 여러 주파수의 파동이 결합된 복잡한 형태
+        let wave1 = sin(radians(angle * 3) + frameCount * 0.05 + index) * 4;
+        let wave2 = cos(radians(angle * 5) + frameCount * 0.03 + index * 1.5) * 2;
+        let wave3 = sin(radians(angle * 2) + frameCount * 0.07 + index * 0.7) * 3;
+        
+        let radius = baseRadius + wave1 + wave2 + wave3;
+        radius *= (1 + morphFactor * 0.3);
+        
+        let x = cos(radians(angle)) * radius;
+        let y = sin(radians(angle)) * radius;
+        vertex(x, y);
+    }
+    endShape(CLOSE);
+}
+
+function drawOrganicDrop(size, morphFactor, index, globalProgress) {
+    let dropSize = size * (0.9 + morphFactor * 0.3);
+    
+    // 물방울이 살아있는 것처럼 움직임
+    let pulseSize = sin(frameCount * 0.06 + index * 1.3) * 0.05 + 1;
+    let asymmetry = cos(frameCount * 0.04 + index * 0.9) * 0.1;
+    
+    beginShape();
+    for (let angle = 0; angle < 360; angle += 8) {
+        let radius = dropSize * 0.5 * pulseSize;
+        
+        // 물방울의 자연스러운 형태
+        if (angle > 150 && angle < 210) {
+            radius *= 1.15; // 아래쪽 볼록
+        } else if (angle > 30 && angle < 150) {
+            radius *= 0.95; // 옆면 약간 들어감
+        }
+        
+        // 미세한 표면 떨림
+        let surfaceTension = sin(angle * 4 + frameCount * 0.1 + index) * 0.02;
+        radius *= (1 + surfaceTension);
+        
+        let x = cos(radians(angle)) * radius * (1 + asymmetry);
+        let y = sin(radians(angle)) * radius * (1.05 - asymmetry * 0.5);
+        vertex(x, y);
+    }
+    endShape(CLOSE);
+    
+    // 동적 하이라이트
+    if (globalProgress > 0.3) {
+        let highlightIntensity = sin(frameCount * 0.08 + index) * 30 + 70;
+        fill(
+            Math.min(255, color[0] + highlightIntensity), 
+            Math.min(255, color[1] + highlightIntensity), 
+            Math.min(255, color[2] + highlightIntensity), 
+            120
+        );
+        
+        let highlightSize = dropSize * (0.25 + sin(frameCount * 0.05 + index) * 0.05);
+        let offsetX = -dropSize * 0.15 + cos(frameCount * 0.03 + index) * 2;
+        let offsetY = -dropSize * 0.2 + sin(frameCount * 0.04 + index) * 1;
+        
+        ellipse(offsetX, offsetY, highlightSize, highlightSize);
+    }
+}
+
+function drawSurfaceTension(crystal, color, progress) {
+    push();
+    
+    let tensionEase = easeInOutQuart(progress);
+    
+    // 방울들이 서로 끌어당기며 합쳐지는 복잡한 시스템
+    let drops = [
+        {angle: 0, distance: 35, size: 16, phase: 0},
+        {angle: 45, distance: 32, size: 18, phase: 0.1},
+        {angle: 90, distance: 38, size: 14, phase: 0.2},
+        {angle: 135, distance: 30, size: 20, phase: 0.05},
+        {angle: 180, distance: 33, size: 17, phase: 0.15},
+        {angle: 225, distance: 36, size: 15, phase: 0.25},
+        {angle: 270, distance: 31, size: 19, phase: 0.08},
+        {angle: 315, distance: 34, size: 16, phase: 0.18}
+    ];
+    
+    // 중심으로의 인력 계산
+    let centralMass = progress * 100;
+    
+    for (let i = 0; i < drops.length; i++) {
+        push();
+        
+        let drop = drops[i];
+        let localProgress = constrain(progress - drop.phase, 0, 1);
+        let attraction = easeInOutCubic(localProgress);
+        
+        // 복잡한 궤도 운동
+        let spiralFactor = sin(frameCount * 0.04 + i * 0.8) * 5 * (1 - attraction);
+        let currentDistance = lerp(drop.distance, 8, attraction);
+        currentDistance += spiralFactor;
+        
+        let currentAngle = drop.angle + sin(frameCount * 0.02 + i) * 10 * (1 - attraction);
+        
+        let x = cos(radians(currentAngle)) * currentDistance;
+        let y = sin(radians(currentAngle)) * currentDistance + 15;
+        
+        translate(x, y);
+        
+        // 방울 간 상호작용으로 크기 변화
+        let neighborInfluence = 0;
+        for (let j = 0; j < drops.length; j++) {
+            if (i !== j) {
+                let otherDrop = drops[j];
+                let otherX = cos(radians(otherDrop.angle)) * lerp(otherDrop.distance, 8, attraction);
+                let otherY = sin(radians(otherDrop.angle)) * lerp(otherDrop.distance, 8, attraction) + 15;
+                let distance = dist(x, y, otherX, otherY);
+                
+                if (distance < 20) {
+                    neighborInfluence += (20 - distance) * 0.01;
+                }
+            }
+        }
+        
+        let dropSize = drop.size * (1 - attraction * 0.4) * (1 + neighborInfluence);
+        
+        // 합쳐지는 과정에서의 변형
+        let stretchToCenter = attraction * 0.6;
+        let centerAngle = atan2(-y, -x);
+        let stretchX = 1 - stretchToCenter * 0.5;
+        let stretchY = 1 + stretchToCenter * 0.8;
+        
+        rotate(centerAngle * stretchToCenter);
+        scale(stretchX, stretchY);
+        
+        // 동적 색상 변화
+        let colorWave = sin(frameCount * 0.05 + i * 1.2) * 15;
+        let alpha = 160 + progress * 40 + colorWave;
+        fill(
+            constrain(color[0] + colorWave * 0.5, 0, 255),
+            constrain(color[1] + colorWave * 0.3, 0, 255),
+            constrain(color[2] + colorWave * 0.7, 0, 255),
+            alpha
+        );
+        
+        // 유기적 방울 형태
+        drawFluidDrop(dropSize / stretchX, dropSize / stretchY, i);
+        
+        pop();
+    }
+    
+    // 중앙 통합 덩어리 - 아이스크림으로 모핑
+    if (progress > 0.3) {
+        let centerProgress = map(progress, 0.3, 1, 0, 1);
+        
+        if (centerProgress < 0.7) {
+            // 초기: 살아있는 유기체 형태
+            let baseSize = lerp(25, 75, easeInOutCubic(centerProgress));
+            let pulse1 = sin(frameCount * 0.06) * 0.1 + 1;
+            let pulse2 = cos(frameCount * 0.04) * 0.05 + 1;
+            let centerSize = baseSize * pulse1 * pulse2;
+            
+            fill(color[0], color[1], color[2], 200 + centerProgress * 55);
+            
+            beginShape();
+            for (let angle = 0; angle < 360; angle += 10) {
+                let radius = centerSize * 0.5;
+                
+                // 점진적으로 3개 영역으로 분화
+                let morphToTriple = map(centerProgress, 0.4, 0.7, 0, 1);
+                morphToTriple = constrain(morphToTriple, 0, 1);
+                
+                // 3개 스쿱 위치 미리보기
+                let region = floor(angle / 120); // 0, 1, 2 영역
+                let regionCenter = region * 120 + 60; // 각 영역의 중심각
+                let distFromCenter = abs(angle - regionCenter);
+                if (distFromCenter > 60) distFromCenter = 120 - distFromCenter;
+                
+                let regionFactor = map(distFromCenter, 0, 60, 1.2, 0.8);
+                radius *= lerp(1, regionFactor, morphToTriple);
+                
+                let wave1 = sin(radians(angle * 2) + frameCount * 0.08) * 4;
+                let wave2 = cos(radians(angle * 3) + frameCount * 0.05) * 2;
+                let wave3 = sin(radians(angle * 5) + frameCount * 0.12) * 1;
+                
+                radius += (wave1 + wave2 + wave3) * (1 - centerProgress * 0.7);
+                
+                let x = cos(radians(angle)) * radius;
+                let y = sin(radians(angle)) * radius * 1.03;
+                vertex(x, y);
+            }
+            endShape(CLOSE);
+            
+        } else {
+            // 후기: 아이스크림 스쿱들로 변형 (완성 후 유지)
+            let morphProgress = map(centerProgress, 0.7, 1, 0, 1);
+            morphProgress = constrain(morphProgress, 0, 1); // 1에서 멈춤
+            drawIceCreamTransition(color, morphProgress);
+        }
+        
+        // 콘 형태로 변형되는 하단부 (완성 후 유지)
+        if (centerProgress > 0.6) {
+            let coneProgress = map(centerProgress, 0.6, 1, 0, 1);
+            coneProgress = constrain(coneProgress, 0, 1); // 1에서 멈춤
+            drawConeTransition(coneProgress, color);
+        }
+    }
+    
+    pop();
+}
+
+function drawFluidDrop(width, height, index) {
+    let points = 16;
+    
+    beginShape();
+    for (let i = 0; i < points; i++) {
+        let angle = i * (360 / points);
+        let baseRadius = min(width, height) * 0.5;
+        
+        // 방울의 자연스러운 비대칭
+        let radiusX = width * 0.5;
+        let radiusY = height * 0.5;
+        
+        // 표면장력 효과
+        let tension = sin(angle * 4 + frameCount * 0.1 + index) * 0.03 + 1;
+        
+        let x = cos(radians(angle)) * radiusX * tension;
+        let y = sin(radians(angle)) * radiusY * tension;
+        
+        vertex(x, y);
+    }
+    endShape(CLOSE);
+}
+
+function drawIceCreamTransition(color, morphProgress) {
+    let scale = 0.8;
+    let scoopRadius = 22 * scale;
+    let scoopY = -40 * scale;
+    
+    // 3개 스쿱의 위치와 색상 정의
+    let scoops = [
+        {x: -15 * scale, y: scoopY, color: [77, 255, 168], delay: 0},      // Forest Green (왼쪽)
+        {x: 15 * scale, y: scoopY, color: [100, 149, 237], delay: 0.2},    // Cornflower Blue (오른쪽)
+        {x: 0, y: scoopY - 10 * scale, color: [255, 255, 0], delay: 0.4}   // Yellow (위쪽)
+    ];
+    
+    for (let i = 0; i < scoops.length; i++) {
+        let scoop = scoops[i];
+        let localProgress = constrain((morphProgress - scoop.delay) / 0.6, 0, 1);
+        
+        if (localProgress > 0) {
+            push();
+            translate(scoop.x, scoop.y);
+            
+            // 원래 색상에서 스쿱 색상으로 변화
+            let r = lerp(color[0], scoop.color[0], localProgress);
+            let g = lerp(color[1], scoop.color[1], localProgress);
+            let b = lerp(color[2], scoop.color[2], localProgress);
+            
+            fill(r, g, b, 200 + localProgress * 55);
+            noStroke();
+            
+            // 유기적 형태에서 오글오글한 스쿱으로 변형
+            beginShape();
+            for (let angle = 0; angle < 360; angle += 15) {
+                let radius = scoopRadius;
+                
+                if (localProgress < 0.5) {
+                    // 초기: 부드러운 유기체 형태
+                    let wave = sin(radians(angle * 2) + frameCount * 0.05 + i) * 3;
+                    radius += wave * (1 - localProgress * 2);
+                } else {
+                    // 후기: 오글오글한 아이스크림 질감
+                    let noiseValue = noise(
+                        cos(radians(angle)) * 0.8 + i * 10, 
+                        sin(radians(angle)) * 0.8 + i * 10, 
+                        frameCount * 0.01
+                    );
+                    radius += (noiseValue - 0.5) * 8 * scale * ((localProgress - 0.5) * 2);
+                }
+                
+                let x = cos(radians(angle)) * radius;
+                let y = sin(radians(angle)) * radius;
+                vertex(x, y);
+            }
+            endShape(CLOSE);
+            
+            pop();
+        }
+    }
+}
+
+function drawConeTransition(coneProgress, color) {
+    if (coneProgress > 0) {
+        let scale = 0.8;
+        
+        // 원래 중앙 덩어리에서 콘 형태로 변형
+        let alpha = coneProgress >= 1 ? 255 : 255 * easeInOutCubic(coneProgress);
+        
+        // 연한 노란색으로 색상 변화
+        let r = lerp(color[0], 255, coneProgress);
+        let g = lerp(color[1], 255, coneProgress);
+        let b = lerp(color[2], 160, coneProgress);
+        
+        fill(r, g, b, alpha);
+        noStroke();
+        
+        // 원형에서 삼각형으로 변형
+        if (coneProgress < 0.5) {
+            // 초기: 원형이 아래로 늘어남
+            let stretchProgress = coneProgress * 2;
+            
+            beginShape();
+            for (let angle = 0; angle < 360; angle += 10) {
+                let radius = 30 * scale;
+                
+                // 아래쪽이 점점 뾰족해짐
+                if (angle > 135 && angle < 225) {
+                    let pointedness = map(sin(radians(angle - 180)), -1, 1, 0.3, 1);
+                    radius *= lerp(1, pointedness, stretchProgress);
+                }
+                
+                let x = cos(radians(angle)) * radius;
+                let y = sin(radians(angle)) * radius * (1 + stretchProgress * 0.8);
+                
+                // 아래쪽을 더 늘림
+                if (y > 0) {
+                    y *= (1 + stretchProgress * 1.5);
+                }
+                
+                vertex(x, y);
+            }
+            endShape(CLOSE);
+        } else {
+            // 후기: 완전한 삼각형 콘 (완성 후에도 유지)
+            beginShape();
+            vertex(0, 60 * scale);                    // 상단 꼭짓점
+            vertex(-25 * scale, -20 * scale);         // 왼쪽 하단
+            vertex(25 * scale, -20 * scale);          // 오른쪽 하단
+            endShape(CLOSE);
+        }
+    }
+}
+        // 기존 함수들 유지 (drawOriginalSVG, drawLemonIceCream, drawStrawberryIceCream, drawBlueberryIceCream 등)
+        function drawOriginalSVG(index, crystal, color, alpha) {
+            fill(color[0], color[1], color[2], alpha * 0.8);
+            stroke(color[0], color[1], color[2], alpha * 0.9);
+            strokeWeight(0);
+            
+            if (index === 0) {
+                drawAccurateGroup1(crystal, alpha);
+            } else if (index === 1) {
+                drawAccurateGroup2(crystal, alpha);
+            } else {
+                drawAccurateGroup3(crystal, alpha);
+            }
+        }
+
+        // 정확한 SVG 그룹들 - 원본 완전 재현
+        function drawAccurateGroup1(crystal, alpha) {
+            let scale = 0.35;
+            let centerX = crystal.svgCenterX;
+            let centerY = crystal.svgCenterY;
+            
+            // 메인 직사각형들 (rounded rectangles)
+            drawSVGRoundedRect(230.82, 367.25, 44.82, 73.76, 21.55, centerX, centerY, scale);
+            drawSVGRoundedRect(256.06, 419.5, 73.76, 44.82, 21.55, centerX, centerY, scale);
+            drawSVGRoundedRect(181.07, 419.5, 73.76, 44.82, 21.55, centerX, centerY, scale);
+            drawSVGRoundedRect(234.14, 441.9, 44.82, 73.76, 21.55, centerX, centerY, scale);
+            
+            // 회전된 직사각형들
+            push();
+            translate(svgToP5X(246.86 + 36.88, centerX, scale), svgToP5Y(393.25 + 22.41, centerY, scale));
+            rotate(radians(-45));
+            rect(-36.88 * scale, -22.41 * scale, 73.76 * scale, 44.82 * scale, 21.55 * scale);
+            pop();
+            
+            push();
+            translate(svgToP5X(191.83 + 36.88, centerX, scale), svgToP5Y(448.27 + 22.41, centerY, scale));
+            rotate(radians(-45));
+            rect(-36.88 * scale, -22.41 * scale, 73.76 * scale, 44.82 * scale, 21.55 * scale);
+            pop();
+            
+            push();
+            translate(svgToP5X(259.73 + 22.41, centerX, scale), svgToP5Y(432.09 + 36.88, centerY, scale));
+            rotate(radians(-45));
+            rect(-22.41 * scale, -36.88 * scale, 44.82 * scale, 73.76 * scale, 21.55 * scale);
+            pop();
+            
+            push();
+            translate(svgToP5X(202.07 + 22.41, centerX, scale), svgToP5Y(381.73 + 36.88, centerY, scale));
+            rotate(radians(-45));
+            rect(-22.41 * scale, -36.88 * scale, 44.82 * scale, 73.76 * scale, 21.55 * scale);
+            pop();
+            
+            // 작은 패스들
+            drawSVGPath1([[336.29,363.41], [318.06,368.62], [313.61,385.03], [314.54,384.66], [330.36,381.49], [336.26,363.43]], centerX, centerY, scale);
+            drawSVGPath1([[178.12,524.58], [195.18,516.33], [196.74,499.4], [195.9,499.92], [180.84,505.76], [178.11,524.58]], centerX, centerY, scale);
+            drawSVGPath1([[140.55,449.63], [158.17,456.58], [171.67,446.25], [170.72,445.99], [156.22,438.89], [140.55,449.61]], centerX, centerY, scale);
+            drawSVGPath1([[169.52,364.06], [176.29,381.75], [193.03,384.75], [192.57,383.86], [188.03,368.36], [169.52,364.06]], centerX, centerY, scale);
+            drawSVGPath1([[250.44,328.68], [242.21,345.74], [251.5,359.96], [251.85,359.02], [260.01,345.08], [250.44,328.68]], centerX, centerY, scale);
+            drawSVGPath1([[259.52,552.38], [266.94,534.95], [256.99,521.17], [256.68,522.12], [249.17,536.42], [259.52,552.38]], centerX, centerY, scale);
+            drawSVGPath1([[331.51,527.16], [327.34,508.67], [311.21,503.31], [311.54,504.26], [313.82,520.24], [331.51,527.16]], centerX, centerY, scale);
+            drawSVGPath1([[368.11,442.2], [351.03,434], [336.81,443.33], [337.75,443.66], [351.71,451.8], [368.11,442.2]], centerX, centerY, scale);
+        }
+
+        function drawAccurateGroup2(crystal, alpha) {
+            let scale = 0.28;
+            let centerX = crystal.svgCenterX;
+            let centerY = crystal.svgCenterY;
+            
+            // 메인 폴리곤들
+            drawSVGPolygon([[615.41, 443.44], [633.42, 407.41], [680.17, 377.76], [650.99, 424.74]], centerX, centerY, scale);
+            drawSVGPolygon([[609.03, 431.36], [603.1, 443.44], [590.77, 449.82], [603.55, 455.28], [609.03, 466.49], [614.83, 455.28], [627.05, 449.84], [615.41, 443.44]], centerX, centerY, scale);
+            drawSVGPolygon([[592.31, 337.14], [609.03, 431.63], [625.48, 337.14], [608.9, 394.13]], centerX, centerY, scale);
+            drawSVGPolygon([[603.19, 443.44], [567.36, 425], [538.27, 377.9], [584.91, 407.64]], centerX, centerY, scale);
+            drawSVGPolygon([[603.19, 455.28], [584.8, 491.13], [537.73, 520.27], [567.41, 473.61]], centerX, centerY, scale);
+            drawSVGPolygon([[614.54, 454.92], [650.32, 473.47], [679.28, 520.62], [632.73, 490.77]], centerX, centerY, scale);
+            drawSVGPolygon([[720.84, 433.54], [626.29, 449.82], [720.68, 466.74], [663.79, 449.86]], centerX, centerY, scale);
+            drawSVGPolygon([[625.8, 559.28], [609.08, 464.82], [592.6, 559.28], [609.19, 502.3]], centerX, centerY, scale);
+            drawSVGPolygon([[496.98, 466.49], [591.44, 449.77], [496.98, 433.32], [553.94, 449.91]], centerX, centerY, scale);
+            
+            // 작은 디테일들 - 원형 바로 근처에 배치
+            // 상단 좌우 쌍 (원형 바로 밑)
+            drawSVGPolygon([[627.38, 376.34], [625.82, 387.68], [632.84, 378.28], [633.71, 368.18]], centerX, centerY, scale);
+            drawSVGPolygon([[585.44, 378.36], [591.86, 387.84], [590.77, 376.13], [584.66, 368.06]], centerX, centerY, scale);
+            // 하단 좌우 쌍 (원형 바로 위)
+            drawSVGPolygon([[590.62, 521.66], [592.18, 510.32], [585.16, 519.72], [584.29, 529.82]], centerX, centerY, scale);
+            drawSVGPolygon([[632.56, 519.64], [626.14, 510.16], [627.23, 521.87], [633.34, 529.94]], centerX, centerY, scale);
+            
+            // 상하 쌍 (기존)
+            drawSVGPolygon([[608.83, 313.22], [604.39, 335.27], [608.83, 355.36], [613.53, 334.91]], centerX, centerY, scale);
+            drawSVGPolygon([[609.23, 584.43], [613.67, 562.36], [609.23, 542.27], [604.55, 562.74]], centerX, centerY, scale);
+            
+            // 좌우 기존 (그대로 유지)
+            drawSVGPolygon([[473.55, 450], [495.62, 454.43], [515.71, 450], [495.24, 445.31]], centerX, centerY, scale);
+            drawSVGPolygon([[745.94, 449.8], [723.89, 445.36], [703.8, 449.8], [724.25, 454.48]], centerX, centerY, scale);
+            
+            // 좌측 원형들 바로 옆에 디테일 쌍 추가 (서로를 향하는 각도)
+            drawSVGPolygon([[540.34, 427.38], [529.68, 425.82], [538.28, 432.84], [548.18, 433.71]], centerX, centerY, scale);
+            drawSVGPolygon([[540.66, 470.62], [529.82, 472.18], [539.72, 465.16], [551.32, 464.29]], centerX, centerY, scale);
+            
+            // 우측 원형들 바로 옆에 디테일 쌍 추가 (좌측과 서로를 향하는 대칭)
+            drawSVGPolygon([[677.66, 470.62], [688.32, 472.18], [679.72, 465.16], [669.82, 464.29]], centerX, centerY, scale);
+            drawSVGPolygon([[677.34, 427.38], [688.18, 425.82], [678.28, 432.84], [666.68, 433.71]], centerX, centerY, scale);
+            
+            // 원형들
+            fill(crystal.color[0], crystal.color[1], crystal.color[2], alpha * 0.9);
+            ellipse(svgToP5X(583.06, centerX, scale), svgToP5Y(362.76, centerY, scale), 2.56 * 2 * scale, 2.56 * 2 * scale);
+            ellipse(svgToP5X(634.89, centerX, scale), svgToP5Y(362.76, centerY, scale), 2.56 * 2 * scale, 2.56 * 2 * scale);
+            ellipse(svgToP5X(633.09, centerX, scale), svgToP5Y(535.99, centerY, scale), 2.56 * 2 * scale, 2.56 * 2 * scale);
+            ellipse(svgToP5X(581.9, centerX, scale), svgToP5Y(536.39, centerY, scale), 2.56 * 2 * scale, 2.56 * 2 * scale);
+            ellipse(svgToP5X(522.46, centerX, scale), svgToP5Y(476.42, centerY, scale), 2.56 * 2 * scale, 2.56 * 2 * scale);
+            ellipse(svgToP5X(522.46, centerX, scale), svgToP5Y(423.47, centerY, scale), 2.56 * 2 * scale, 2.56 * 2 * scale);
+            ellipse(svgToP5X(695.6, centerX, scale), svgToP5Y(423.47, centerY, scale), 2.56 * 2 * scale, 2.56 * 2 * scale);
+            ellipse(svgToP5X(695.24, centerX, scale), svgToP5Y(476.82, centerY, scale), 2.56 * 2 * scale, 2.56 * 2 * scale);
+            
+            // 직사각형들
+            fill(crystal.color[0], crystal.color[1], crystal.color[2], alpha * 0.8);
+            rect(svgToP5X(512.96, centerX, scale), svgToP5Y(449.57, centerY, scale), 43.03 * scale, 0.62 * scale);
+            rect(svgToP5X(608.88, centerX, scale), svgToP5Y(502.01, centerY, scale), 0.62 * scale, 43.03 * scale);
+        }
+
+        function drawAccurateGroup3(crystal, alpha) {
+            let scale = 0.25;
+            let centerX = crystal.svgCenterX;
+            let centerY = crystal.svgCenterY;
+            
+            // 메인 폴리곤들 - opacity 0.3과 0.5 구분
+            fill(crystal.color[0], crystal.color[1], crystal.color[2], alpha * 0.5); // cls-3 (opacity .5)
+            drawSVGPolygon([[882.67, 463.31], [922.58, 449.32], [884.08, 434.53], [857.52, 448.46]], centerX, centerY, scale);
+            drawSVGPolygon([[964.09, 510.95], [949.06, 471.41], [935.26, 510.29], [949.88, 536.49]], centerX, centerY, scale);
+            drawSVGPolygon([[1015.84, 434.97], [975.74, 448.43], [1014.04, 463.76], [1040.79, 450.18]], centerX, centerY, scale);
+            drawSVGPolygon([[934.18, 381.99], [948.59, 421.75], [963, 383.09], [948.79, 356.67]], centerX, centerY, scale);
+            
+            // 작은 패스들
+            drawSVGPath1([[864.92, 358.17], [867.82, 370.35], [878.53, 373.77], [878.31, 373.15], [876.69, 362.6], [864.94, 358.17]], centerX, centerY, scale);
+            drawSVGPath1([[1033.06, 534.45], [1029.47, 522.45], [1018.59, 519.65], [1018.84, 520.25], [1021.06, 530.7], [1033.06, 534.45]], centerX, centerY, scale);
+            drawSVGPath1([[873.14, 540.87], [883.63, 534.01], [883.21, 522.79], [882.71, 523.19], [873.34, 528.3], [873.14, 540.87]], centerX, centerY, scale);
+            drawSVGPath1([[1033.61, 362.32], [1021.5, 365.5], [1018.33, 376.28], [1018.94, 376.05], [1029.45, 374.19], [1033.61, 362.32]], centerX, centerY, scale);
+            
+            fill(crystal.color[0], crystal.color[1], crystal.color[2], alpha * 0.3); // cls-2 (opacity .3)
+            drawSVGPolygon([[906.67, 462.74], [883.81, 519.94], [936.92, 491.87], [947.07, 449.37]], centerX, centerY, scale);
+            drawSVGPolygon([[960.7, 490.48], [1016.48, 516.61], [991.51, 461.95], [949.68, 449.37]], centerX, centerY, scale);
+            drawSVGPolygon([[937.05, 406.46], [881.91, 378.99], [905.55, 434.23], [947.07, 447.83]], centerX, centerY, scale);
+            drawSVGPolygon([[989.69, 436.46], [1014.98, 380.29], [960.71, 406.07], [948.76, 448.1]], centerX, centerY, scale);
+        }
+
+        function drawLemonIceCream(progress) {
+            push();
+            
+            // 스케일과 중심점 조정
+            let scale = 0.25;
+            let offsetX = -595.27 * scale;
+            let offsetY = -380 * scale;
+            
+            // 1. 초록색 스틱 (위아래로 길게) - #4dffa8, opacity 0.8
+            if (progress > 0.1) {
+                let stickProgress = map(progress, 0.1, 0.4, 0, 1);
+                fill(77, 255, 168, 255 * 0.8 * stickProgress);
+                noStroke();
+                
+                // 스틱의 실제 크기와 위치
+                let stickX = offsetX + 541.74 * scale;
+                let stickY = offsetY + 199.38 * scale;
+                let stickW = 33.23 * scale;
+                let stickH = 465.17 * scale;
+                let stickR = 16.61 * scale;
+                
+                rect(stickX, stickY, stickW, stickH, stickR);
+            }
+            
+            // 2. 메인 아이스크림 - 위쪽 베어문 + 자연스러운 그라데이션
+            if (progress > 0.3) {
+                let iceProgress = map(progress, 0.3, 0.8, 0, 1);
+                
+                // 아이스크림 크기 조정 (세로로 더 길게, 중앙 정렬)
+                let stickCenterX = offsetX + (541.74 + 33.23/2) * scale; // 스틱 중심
+                let iceW = 200 * scale; // 너비 (이미지에 맞게 조정)
+                let iceH = 350 * scale; // 높이 (더 길게)
+                let iceX = stickCenterX - iceW/2; // 중앙 정렬
+                let iceY = offsetY + 195 * scale;
+                
+                // 위쪽 베어문 부분들 (이미지처럼 위쪽에만)
+                let topBites = [
+                    {x: iceW * 0.15, y: iceH * 0.05, radius: 35 * scale, depth: 0.8},
+                    {x: iceW * 0.85, y: iceH * 0.08, radius: 30 * scale, depth: 0.35},
+                    {x: iceW * 0.45, y: iceH * 0.02, radius: 25 * scale, depth: 0.3}
+                ];
+                
+                // 더 자연스러운 그라데이션을 위해 세밀하게 렌더링
+                for (let y = 0; y < iceH; y += 1) {
+                    let gradientProgress = y / iceH;
+                    
+                    // 더 부드러운 곡선 그라데이션 (이미지와 유사하게)
+                    let smoothProgress = (sin((gradientProgress - 0.5) * PI) + 1) / 2;
+                    smoothProgress = pow(smoothProgress, 1.2); // 더 자연스러운 커브
+                    
+                    // 위쪽(거의 투명한 흰색)에서 아래쪽(진한 파란색)으로
+                    let topColor = [255, 255, 255, 0.20]; // 더 불투명하게
+                    let bottomColor = [40, 110, 200, 0.9]; // 더 진하고 불투명한 파란색
+                    
+                    let r = lerp(topColor[0], bottomColor[0], smoothProgress);
+                    let g = lerp(topColor[1], bottomColor[1], smoothProgress);
+                    let b = lerp(topColor[2], bottomColor[2], smoothProgress);
+                    let a = lerp(topColor[3], bottomColor[3], smoothProgress);
+                    
+                    // 노이즈 효과 (더 미세하게)
+                    let noiseValue = noise(iceX * 0.008, (iceY + y) * 0.008, frameCount * 0.015);
+                    let noiseIntensity = 0.06;
+                    
+                    r += (noiseValue - 0.5) * 15 * noiseIntensity;
+                    g += (noiseValue - 0.5) * 15 * noiseIntensity;
+                    b += (noiseValue - 0.5) * 15 * noiseIntensity;
+                    a *= (1 + (noiseValue - 0.5) * noiseIntensity * 0.3);
+                    
+                    r = constrain(r, 0, 255);
+                    g = constrain(g, 0, 255);
+                    b = constrain(b, 0, 255);
+                    a = constrain(a, 0.2, 1);
+                    
+                    fill(r, g, b, 255 * a * iceProgress);
+                    noStroke();
+                    
+                    // 각 라인의 너비를 위쪽 베어문에 따라서만 조정
+                    let currentY = iceY + y;
+                    let lineStartX = iceX;
+                    let lineEndX = iceX + iceW;
+                    
+                    // 위쪽 베어문 효과만 적용 (y < iceH * 0.2 영역에서만)
+                    if (y < iceH * 0.45) { // 상위 15% 영역에서만 베어문 적용
+                        for (let bite of topBites) {
+                            let biteX = iceX + bite.x;
+                            let biteY = iceY + bite.y;
+                            let distanceToBite = dist(0, currentY, 0, biteY);
+                            
+                            if (distanceToBite < bite.radius) {
+                                let biteEffect = (bite.radius - distanceToBite) / bite.radius;
+                                let cutDepth = bite.depth * bite.radius * biteEffect;
+                                
+                                // 베어문 위치에 따라 좌우에서 잘라냄
+                                if (bite.x < iceW * 0.3) {
+                                    // 왼쪽에서 베어문
+                                    lineStartX = Math.max(lineStartX, biteX + cutDepth);
+                                } else if (bite.x > iceW * 0.7) {
+                                    // 오른쪽에서 베어문
+                                    lineEndX = Math.min(lineEndX, biteX - cutDepth);
+                                } else {
+                                    // 가운데에서 베어문 (위아래로)
+                                    if (Math.abs(lineStartX + iceW/2 - biteX) < cutDepth) {
+                                        // 이 줄은 완전히 베어문됨
+                                        lineStartX = lineEndX;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 베어문이 적용된 라인 그리기
+                    if (lineEndX > lineStartX) {
+                        rect(lineStartX, currentY, lineEndX - lineStartX, 2);
+                    }
+                }
+                
+                // 추가 텍스처 효과 (베어문 부분 제외)
+                if (progress > 0.5) {
+                    let textureProgress = map(progress, 0.5, 0.8, 0, 1);
+                    
+                    for (let i = 0; i < 25 * textureProgress; i++) {
+                        let tx = iceX + random(iceW);
+                        let ty = iceY + random(iceH);
+                        
+                        // 위쪽 베어문 부분인지 확인
+                        let inBite = false;
+                        if (ty - iceY < iceH * 0.15) { // 상위 15% 영역에서만 체크
+                            for (let bite of topBites) {
+                                let biteX = iceX + bite.x;
+                                let biteY = iceY + bite.y;
+                                if (dist(tx, ty, biteX, biteY) < bite.radius * bite.depth) {
+                                    inBite = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (!inBite) {
+                            let positionFactor = (ty - iceY) / iceH;
+                            let textureAlpha = positionFactor * 0.15 * textureProgress;
+                            
+                            fill(255, 255, 255, textureAlpha * 255);
+                            noStroke();
+                            ellipse(tx, ty, random(0.2, 0.8), random(0.2, 0.8));
+                        }
+                    }
+                }
+            }
+            
+            // 3. 노란색 점들 - 위쪽 베어문 부분 제외하고 고르게 배치
+            if (progress > 0.6) {
+                let dotProgress = map(progress, 0.6, 1, 0, 1);
+                
+                // 아이스크림 영역에 맞게 점들 재배치
+                let stickCenterX = offsetX + (541.74 + 33.23/2) * scale;
+                let iceW = 200 * scale;
+                let iceH = 350 * scale;
+                let iceX = stickCenterX - iceW/2;
+                let iceY = offsetY + 195 * scale;
+                
+                // 새로운 점들 위치 (위쪽 베어문 피하고 고르게 분포)
+                let dots = [
+                    {x: 0.25, y: 0.3, r: 4},
+                    {x: 0.75, y: 0.25, r: 3.0},
+                    {x: 0.4, y: 0.4, r: 2.8},
+                    {x: 0.6, y: 0.5, r: 3.2},
+                    {x: 0.2, y: 0.6, r: 2.5},
+                    {x: 0.8, y: 0.55, r: 2.7},
+                    {x: 0.35, y: 0.7, r: 3.0},
+                    {x: 0.65, y: 0.65, r: 5},
+                    {x: 0.45, y: 0.8, r: 2.9},
+                    {x: 0.55, y: 0.35, r: 5},
+                    {x: 0.3, y: 0.85, r: 2.4},
+                    {x: 0.7, y: 0.85, r: 5}
+                ];
+                
+                for (let i = 0; i < dots.length; i++) {
+                    let dot = dots[i];
+                    
+                    let individualProgress = map(progress, 0.6 + i * 0.015, 1, 0, 1);
+                    individualProgress = constrain(individualProgress, 0, 1);
+                    
+                    if (individualProgress > 0) {
+                        let dotX = iceX + dot.x * iceW;
+                        let dotY = iceY + dot.y * iceH;
+                        
+                        // 위쪽 베어문 부분에 있는지 확인 (15% 영역에서만)
+                        let inBite = false;
+                        if (dot.y < 0.15) {
+                            let topBites = [
+                                {x: iceW * 0.15, y: iceH * 0.05, radius: 35 * scale},
+                                {x: iceW * 0.85, y: iceH * 0.08, radius: 30 * scale},
+                                {x: iceW * 0.45, y: iceH * 0.02, radius: 25 * scale}
+                            ];
+                            
+                            for (let bite of topBites) {
+                                let biteX = iceX + bite.x;
+                                let biteY = iceY + bite.y;
+                                if (dist(dotX, dotY, biteX, biteY) < bite.radius * 0.7) {
+                                    inBite = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (!inBite) {
+                            // 미세한 노이즈
+                            let noiseX = noise(i * 10, frameCount * 0.008) * 1 - 0.5;
+                            let noiseY = noise(i * 10 + 100, frameCount * 0.008) * 1 - 0.5;
+                            
+                            // 색상 변화 (더 일관된 노란색)
+                            let baseColor = [255, 255, 140]; // 더 진한 노란색
+                            let r = baseColor[0] + noise(i * 5, frameCount * 0.015) * 10 - 5;
+                            let g = baseColor[1] + noise(i * 5 + 50, frameCount * 0.015) * 10 - 5;
+                            let b = baseColor[2] + noise(i * 5 + 100, frameCount * 0.015) * 15 - 7.5;
+                            
+                            r = constrain(r, 240, 255);
+                            g = constrain(g, 240, 255);
+                            b = constrain(b, 120, 160);
+                            
+                            fill(r, g, b, 255 * 0.9 * individualProgress);
+                            noStroke();
+                            
+                            let dotSize = dot.r * scale * individualProgress;
+                            dotX += noiseX;
+                            dotY += noiseY;
+                            
+                            ellipse(dotX, dotY, dotSize, dotSize);
+                            
+                            // 하이라이트
+                            if (individualProgress > 0.5) {
+                                fill(255, 255, 180, 80 * individualProgress);
+                                ellipse(dotX - dotSize * 0.15, dotY - dotSize * 0.15, dotSize * 0.25, dotSize * 0.25);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            pop();
+        }
+
+        function drawPNGMorphing(crystalIndex, progress) {
+    push();
+    
+    // PNG 이미지가 로드되었는지 확인
+    if (!pngImages[crystalIndex]) {
+        // PNG가 없으면 아이스크림 상태 유지
+        if (crystalIndex === 0) {
+            drawLemonIceCream(1.0);
+        } else if (crystalIndex === 1) {
+            drawStrawberryIceCream([100, 149, 237], 1.0);
+        } else {
+            drawBlueberryIceCream([100, 149, 237], 1.0);
+        }
+        pop();
+        return;
+    }
+    
+    // 더 부드러운 이징 적용
+    let morphEase = easeInOutSmoother(progress);
+    
+    // 1단계: 아이스크림과 PNG 블렌딩 (0-0.6) - 더 길게
+    if (progress < 0.6) {
+        let iceCreamAlpha = map(morphEase, 0, 0.6, 1.0, 0.1); // 완전히 사라지지 않게
+        
+        push();
+        tint(255, 255 * iceCreamAlpha);
+        if (crystalIndex === 0) {
+            drawLemonIceCream(1.0);
+        } else if (crystalIndex === 1) {
+            drawStrawberryIceCream([100, 149, 237], 1.0);
+        } else {
+            drawBlueberryIceCream([100, 149, 237], 1.0);
+        }
+        noTint();
+        pop();
+    }
+    
+    // 2단계: PNG 점진적 등장 (0.3-1.0) - 겹치는 구간 늘림
+    if (progress > 0.5) {
+        let pngProgress = map(morphEase, 0.3, 1.0, 0, 1);
+        
+        // 더 부드러운 알파 변화
+        let pngAlpha = map(easeInOutCubic(pngProgress), 0, 1, 0, 255);
+        
+        // 자연스러운 크기 변화 (작게 시작해서 약간 커졌다가 원래 크기로)
+        let scalePhase1 = map(pngProgress, 0, 0.4, 0.3, 1.1); // 작게 시작해서 약간 오버사이즈
+        let scalePhase2 = map(pngProgress, 0.4, 1.0, 1.1, 1.0); // 원래 크기로 돌아옴
+        let pngScale = pngProgress < 0.4 ? scalePhase1 : scalePhase2;
+        
+        // 미세한 회전 효과
+        let rotation = sin(pngProgress * PI) * 5; // 최대 5도 회전
+        
+        // 약간의 위치 변화 (자연스러운 "착지" 효과)
+        let offsetY = map(easeOutBounce(pngProgress), 0, 1, -10, 0); // 위에서 아래로 떨어지며 착지
+        
+        push();
+        translate(0, offsetY);
+        rotate(radians(rotation));
+        
+        tint(255, pngAlpha);
+        imageMode(CENTER);
+        
+        // 크기 계산
+        // 크기 계산 - 각 크리스탈별 개별 조정
+let scaleMultipliers = [1.0, 1.0, 0.6]; // icy1, icy2, icy3 순서
+let baseScale = crystals[crystalIndex].scale * 0.05 * scaleMultipliers[crystalIndex];
+let finalScale = baseScale * pngScale;
+        
+        image(pngImages[crystalIndex], 
+              0, 0, 
+              pngImages[crystalIndex].width * finalScale, 
+              pngImages[crystalIndex].height * finalScale);
+        
+        noTint();
+        pop();
+    }
+    
+    
+    
+    pop();
+}
+
+// 모핑 파티클 효과 함수 추가
+function drawMorphingParticles(crystalIndex, progress) {
+    push();
+    
+    let particleCount = Math.floor(20 * progress);
+    let crystalColor = crystals[crystalIndex].color;
+    
+    for (let i = 0; i < particleCount; i++) {
+        let angle = (i / particleCount) * TWO_PI + frameCount * 0.02;
+        let distance = 60 + sin(frameCount * 0.05 + i) * 20;
+        let size = 2 + sin(frameCount * 0.1 + i * 0.5) * 1;
+        
+        let x = cos(angle) * distance * (1 - progress * 0.5);
+        let y = sin(angle) * distance * (1 - progress * 0.5);
+        
+        let alpha = 150 * progress * (1 - i / particleCount);
+        
+        fill(crystalColor[0], crystalColor[1], crystalColor[2], alpha);
+        noStroke();
+        ellipse(x, y, size, size);
+        
+        // 반짝임 효과
+        if (random() < 0.3) {
+            fill(255, 255, 255, alpha * 0.5);
+            ellipse(x, y, size * 0.5, size * 0.5);
+        }
+    }
+    
+    pop();
+}
+
+        function drawStrawberryIceCream(color, progress) {
+    push();
+    
+    // 스케일 조정
+    let scale = 0.7;
+    
+    // progress = 0일 때도 기본적으로 보이도록 최소 투명도 보장
+    let safeProgress = Math.max(0.3, progress);
+    
+    // SVG viewBox 기준으로 좌표 변환 (107.97 x 140.73)
+    // SVG 이미지의 실제 크기는 930x1207이고, transform으로 0.09 스케일 적용됨
+    translate(0, -20 * scale); // 중앙 정렬을 위한 조정
+    
+    let cupProgress = safeProgress > 0.1 ? map(safeProgress, 0.1, 0.4, 0, 1) : 0.7;
+    let scoopProgress = safeProgress > 0.3 ? map(safeProgress, 0.3, 0.8, 0, 1) : 0.6;
+    
+    // SVG 이미지를 base64로 그대로 렌더링하는 방식으로 변경
+    // 하지만 p5.js에서는 직접 SVG를 렌더링하기 어려우므로, 
+    // SVG의 형태를 분석해서 패스로 재구현
+    
+    // 1. 컵 부분 (SVG의 사다리꼴 형태 참고)
+    fill(77, 255, 168, 255 * cupProgress); // SVG의 lightgreen 색상
+    noStroke();
+    
+    // SVG 좌표계를 p5.js 좌표계로 변환
+    beginShape();
+    vertex(-55 * scale, 20 * scale);      
+    vertex(55 * scale, 20 * scale);       
+    vertex(35 * scale, 80 * scale);       
+    vertex(-35 * scale, 80 * scale);      
+    endShape(CLOSE);
+    
+    // 2. 컵의 스트라이프 패턴
+    push();
+    drawingContext.save();
+    
+    // 클리핑 영역 설정
+    beginShape();
+    vertex(-55 * scale, 20 * scale);
+    vertex(55 * scale, 20 * scale);
+    vertex(35 * scale, 80 * scale);
+    vertex(-35 * scale, 80 * scale);
+    endShape();
+    drawingContext.clip();
+    
+    fill(100, 149, 237, 255 * cupProgress); // cornflower blue
+    let stripeWidth = 5.75 * scale;
+    let stripeSpacing = 14.7 * scale;
+    
+    for (let i = -8; i < 10; i++) {
+        push();
+        translate(i * stripeSpacing - 50 * scale, -50 * scale);
+        rotate(radians(-17.5));
+        rect(0, 0, stripeWidth, 300 * scale);
+        pop();
+    }
+    
+    drawingContext.restore();
+    pop();
+    
+    // 3. 첫 번째 아이스크림 스쿱 (cornflower blue)
+    push();
+    fill(100, 149, 237, 255 * scoopProgress);
+    noStroke();
+    
+    beginShape();
+    curveVertex(-55 * scale, 12 * scale);
+    curveVertex(-58 * scale, 12 * scale);
+    curveVertex(-52 * scale, -5 * scale);
+    curveVertex(-30 * scale, -18 * scale);
+    curveVertex(-42 * scale, -25 * scale);
+    curveVertex(-38 * scale, -32 * scale);
+    curveVertex(-32 * scale, -38 * scale);
+    curveVertex(-25 * scale, -42 * scale);
+    curveVertex(-18 * scale, -44 * scale);
+    curveVertex(-10 * scale, -46 * scale);
+    curveVertex(-2 * scale, -45 * scale);
+    curveVertex(5 * scale, -42 * scale);
+    curveVertex(10 * scale, -38 * scale);
+    curveVertex(14 * scale, -32 * scale);
+    curveVertex(17 * scale, -25 * scale);
+    curveVertex(19 * scale, -18 * scale);
+    curveVertex(22 * scale, -10 * scale);
+    curveVertex(23 * scale, -2 * scale);
+    curveVertex(22 * scale, 5 * scale);
+    curveVertex(20 * scale, 12 * scale);
+    curveVertex(16 * scale, 17 * scale);
+    curveVertex(10 * scale, 20 * scale);
+    curveVertex(2 * scale, 22 * scale);
+    curveVertex(-8 * scale, 21 * scale);
+    curveVertex(-18 * scale, 20 * scale);
+    curveVertex(-28 * scale, 19 * scale);
+    curveVertex(-38 * scale, 17 * scale);
+    curveVertex(-45 * scale, 15 * scale);
+    curveVertex(-55 * scale, 12 * scale);
+    curveVertex(-55 * scale, 12 * scale);
+    endShape();
+    pop();
+    
+    // 4. 두 번째 아이스크림 스쿱 (yellow)
+    if (scoopProgress > 0.4 || safeProgress >= 0.3) {
+        let yellowProgress = scoopProgress > 0.4 ? map(scoopProgress, 0.4, 1, 0, 1) : 0.5;
+        
+        push();
+        drawingContext.globalCompositeOperation = 'multiply';
+        fill(255, 255, 100, 200 * yellowProgress);
+        noStroke();
+        
+        beginShape();
+        curveVertex(-20 * scale, 10 * scale);
+        curveVertex(-18 * scale, 5 * scale);
+        curveVertex(-12 * scale, 1 * scale);
+        curveVertex(-9 * scale, -5 * scale);
+        curveVertex(-10 * scale, -7 * scale);
+        curveVertex(-22 * scale, -15 * scale);
+        curveVertex(-20 * scale, -25 * scale);
+        curveVertex(-15 * scale, -32 * scale);
+        curveVertex(-8 * scale, -35 * scale);
+        curveVertex(0 * scale, -37 * scale);
+        curveVertex(5 * scale, -36 * scale);
+        curveVertex(8 * scale, -33 * scale);
+        curveVertex(15 * scale, -35 * scale);
+        curveVertex(25 * scale, -38 * scale);
+        curveVertex(35 * scale, -37 * scale);
+        curveVertex(42 * scale, -33 * scale);
+        curveVertex(48 * scale, -25 * scale);
+        curveVertex(52 * scale, -15 * scale);
+        curveVertex(53 * scale, -5 * scale);
+        curveVertex(50 * scale, 5 * scale);
+        curveVertex(45 * scale, 10 * scale);
+        curveVertex(48 * scale, 15 * scale);
+        curveVertex(45 * scale, 20 * scale);
+        curveVertex(40 * scale, 22 * scale);
+        curveVertex(32 * scale, 23 * scale);
+        curveVertex(22 * scale, 22 * scale);
+        curveVertex(12 * scale, 20 * scale);
+        curveVertex(2 * scale, 18 * scale);
+        curveVertex(-8 * scale, 17 * scale);
+        curveVertex(-15 * scale, 15 * scale);
+        curveVertex(-15 * scale, 15 * scale);
+        endShape();
+        
+        drawingContext.globalCompositeOperation = 'source-over';
+        pop();
+    }
+    
+    pop();
+}
+
+function drawPNGMorphing(crystalIndex, progress) {
+    push();
+    
+   
+    if (!pngImages[crystalIndex]) {
+        
+        if (crystalIndex === 0) {
+            drawLemonIceCream(1.0);
+        } else if (crystalIndex === 1) {
+            drawStrawberryIceCream([100, 149, 237], 1.0);
+        } else {
+            drawBlueberryIceCream([100, 149, 237], 1.0);
+        }
+        pop();
+        return;
+    }
+    
+    
+    let morphEase = easeInOutSmoother(progress);
+    
+    if (progress < 0.6) {
+        let iceCreamAlpha = map(morphEase, 0, 0.6, 1.0, 0.1); 
+        
+        push();
+        tint(255, 255 * iceCreamAlpha);
+        if (crystalIndex === 0) {
+            drawLemonIceCream(1.0);
+        } else if (crystalIndex === 1) {
+            drawStrawberryIceCream([100, 149, 237], 1.0);
+        } else {
+            drawBlueberryIceCream([100, 149, 237], 1.0);
+        }
+        noTint();
+        pop();
+    }
+    
+    // 2단계: PNG 점진적 등장 (0.3-1.0) - 겹치는 구간 늘림
+    if (progress > 0.5) {
+        let pngProgress = map(morphEase, 0.3, 1.0, 0, 1);
+        
+        // 더 부드러운 알파 변화
+        let pngAlpha = map(easeInOutCubic(pngProgress), 0, 1, 0, 255);
+        
+        // 자연스러운 크기 변화 (작게 시작해서 약간 커졌다가 원래 크기로)
+        let scalePhase1 = map(pngProgress, 0, 0.4, 0.3, 1.1); // 작게 시작해서 약간 오버사이즈
+        let scalePhase2 = map(pngProgress, 0.4, 1.0, 1.1, 1.0); // 원래 크기로 돌아옴
+        let pngScale = pngProgress < 0.4 ? scalePhase1 : scalePhase2;
+        
+        // 미세한 회전 효과
+        let rotation = sin(pngProgress * PI) * 5; // 최대 5도 회전
+        
+        // 약간의 위치 변화 (자연스러운 "착지" 효과)
+        let offsetY = map(easeOutBounce(pngProgress), 0, 1, -10, 0); // 위에서 아래로 떨어지며 착지
+        
+        push();
+        translate(0, offsetY);
+        rotate(radians(rotation));
+        
+        tint(255, pngAlpha);
+        imageMode(CENTER);
+        
+        // 크기 계산
+        // 크기 계산 - 각 크리스탈별 개별 조정
+let scaleMultipliers = [1.0, 1.0, 0.6]; // icy1, icy2, icy3 순서
+let baseScale = crystals[crystalIndex].scale * 0.05 * scaleMultipliers[crystalIndex];
+let finalScale = baseScale * pngScale;
+        
+        image(pngImages[crystalIndex], 
+              0, 0, 
+              pngImages[crystalIndex].width * finalScale, 
+              pngImages[crystalIndex].height * finalScale);
+        
+        noTint();
+        pop();
+    }
+    
+    
+    
+    pop();
+}
+
+// 모핑 파티클 효과 함수 추가
+function drawMorphingParticles(crystalIndex, progress) {
+    push();
+    
+    let particleCount = Math.floor(20 * progress);
+    let crystalColor = crystals[crystalIndex].color;
+    
+    for (let i = 0; i < particleCount; i++) {
+        let angle = (i / particleCount) * TWO_PI + frameCount * 0.02;
+        let distance = 60 + sin(frameCount * 0.05 + i) * 20;
+        let size = 2 + sin(frameCount * 0.1 + i * 0.5) * 1;
+        
+        let x = cos(angle) * distance * (1 - progress * 0.5);
+        let y = sin(angle) * distance * (1 - progress * 0.5);
+        
+        let alpha = 150 * progress * (1 - i / particleCount);
+        
+        fill(crystalColor[0], crystalColor[1], crystalColor[2], alpha);
+        noStroke();
+        ellipse(x, y, size, size);
+        
+        // 반짝임 효과
+        if (random() < 0.3) {
+            fill(255, 255, 255, alpha * 0.5);
+            ellipse(x, y, size * 0.5, size * 0.5);
+        }
+    }
+    
+    pop();
+}
+
+        function drawBlueberryIceCream(color, progress) {
+    push();
+    
+    // 전체 스케일 조정
+    let scale = 0.8;
+    
+    // progress가 0.8을 넘으면 SVG 스타일로 모핑 시작
+    if (progress > 0.8) {
+        let morphProgress = map(progress, 0.8, 1.0, 0, 1);
+        morphProgress = easeInOutSmoother(morphProgress); // 부드러운 전환
+        
+        // 기존 아이스크림 그래픽의 투명도 감소
+        let oldAlpha = 255 * (1 - morphProgress);
+        
+        // SVG 스타일의 투명도 증가
+        let newAlpha = 255 * morphProgress;
+        
+        // 기존 아이스크림 그래픽 그리기 (투명도 적용)
+        drawOriginalIceCream(scale, oldAlpha, progress);
+        
+        // SVG 아이스크림 그리기
+        drawSVGIceCream(scale, newAlpha); 
+        
+    } else {
+        // progress가 0.8 이하일 때는 기존 아이스크림만 그리기
+        drawOriginalIceCream(scale, 255, progress);
+    }
+    
+    pop();
+}
+
+// SVG 아이스크림을 그리는 함수
+function drawSVGIceCream(scale, alpha) {
+    push();
+    
+    // SVG 좌표를 p5.js 좌표로 변환하는 함수
+    function svgX(x) { return (x - 52.92) * scale * 0.8; }
+    function svgY(y) { return (y - 67.425) * scale * 0.8; }
+    
+    // 1. 콘 (cls-4, #f2ffa8) - 더 길게
+    fill(242, 255, 168, alpha);
+    noStroke();
+    beginShape();
+    vertex(svgX(36.13), svgY(61.78));
+    vertex(svgX(72.34), svgY(61.78));
+    vertex(svgX(54.24), svgY(135)); // 더 길게 확장
+    endShape(CLOSE);
+    
+    // 공통 스쿱 형태 정의 (더 작게)
+    let scoopShape = [
+        {angle: 0, radius: 16}, {angle: 0.6, radius: 18}, {angle: 1.2, radius: 20},
+        {angle: 1.8, radius: 21}, {angle: 2.4, radius: 19}, {angle: 3.0, radius: 17},
+        {angle: 3.6, radius: 16}, {angle: 4.2, radius: 19}, {angle: 4.8, radius: 21},
+        {angle: 5.4, radius: 19}, {angle: 6.0, radius: 16}
+    ];
+    
+    // 2. 녹색 스쿱 (왼쪽)
+    fill(0, 255, 121, alpha);
+    noStroke();
+    drawSmoothBlob(42, 35, 15, 21, scoopShape, scale, alpha);
+    
+    // 3. 파란색 스쿱 (오른쪽)
+    fill(101, 169, 253, alpha * 0.8);
+    noStroke();
+    drawSmoothBlob(64, 35, 15, 21, scoopShape, scale, alpha * 0.8);
+    
+    // 4. 노란색 스쿱 (위쪽 중앙)
+    fill(251, 242, 54, alpha * 0.5);
+    noStroke();
+    drawSmoothBlob(53, 20, 15, 21, scoopShape, scale, alpha * 0.5);
+    
+    // 5. 콘의 파란색 장식들 (cls-5, #5ea6fd)
+    fill(94, 166, 253, alpha);
+    noStroke();
+    
+    // 첫 번째 파란색 장식
+    beginShape();
+    vertex(svgX(48.13), svgY(101.66));
+    vertex(svgX(57.16), svgY(112.21));
+    vertex(svgX(47.36), svgY(99.07));
+    endShape(CLOSE);
+    
+    // 두 번째 파란색 장식
+    beginShape();
+    vertex(svgX(45.4), svgY(92.57));
+    vertex(svgX(58.31), svgY(108.39));
+    vertex(svgX(44.21), svgY(88.64));
+    endShape(CLOSE);
+    
+    pop();
+}
+
+// 부드러운 blob 형태를 그리는 함수
+function drawSmoothBlob(centerX, centerY, minRadius, maxRadius, points, scale, alpha) {
+    push();
+    
+    // SVG 좌표를 p5.js 좌표로 변환
+    let x = (centerX - 52.92) * scale * 0.8;
+    let y = (centerY - 67.425) * scale * 0.8;
+    
+    translate(x, y);
+    
+    beginShape();
+    
+    // 베지어 곡선을 사용하여 부드러운 형태 생성
+    let numPoints = points.length;
+    
+    for (let i = 0; i < numPoints; i++) {
+        let current = points[i];
+        let next = points[(i + 1) % numPoints];
+        
+        // 현재 점의 좌표 계산
+        let currentR = map(current.radius, 0, 50, minRadius, maxRadius) * scale;
+        let currentX = cos(current.angle) * currentR;
+        let currentY = sin(current.angle) * currentR;
+        
+        // 다음 점의 좌표 계산
+        let nextR = map(next.radius, 0, 50, minRadius, maxRadius) * scale;
+        let nextX = cos(next.angle) * nextR;
+        let nextY = sin(next.angle) * nextR;
+        
+        if (i === 0) {
+            vertex(currentX, currentY);
+        }
+        
+        // 베지어 곡선의 제어점 계산
+        let controlDist1 = currentR * 0.3;
+        let controlDist2 = nextR * 0.3;
+        
+        let control1X = currentX + cos(current.angle + PI/2) * controlDist1;
+        let control1Y = currentY + sin(current.angle + PI/2) * controlDist1;
+        
+        let control2X = nextX + cos(next.angle - PI/2) * controlDist2;
+        let control2Y = nextY + sin(next.angle - PI/2) * controlDist2;
+        
+        // 베지어 곡선으로 연결
+        bezierVertex(control1X, control1Y, control2X, control2Y, nextX, nextY);
+    }
+    
+    endShape(CLOSE);
+    pop();
+}
+
+// 기존 아이스크림 그래픽을 별도 함수로 분리
+function drawOriginalIceCream(scale, alpha, progress) {
+    // 1. 노란색 이등변삼각형 콘 (위를 향함 - 180도 뒤집힌 형태)
+    if (progress > 0.1) {
+        let coneProgress = map(progress, 0.1, 0.4, 0, 1);
+        
+        fill(255, 255, 160, alpha * coneProgress); // 연한 노란색
+        noStroke();
+        
+        // 위를 향한 이등변삼각형 콘
+        beginShape();
+        vertex(0, 60 * scale);          // 상단 꼭짓점
+        vertex(-25 * scale, -20 * scale); // 왼쪽 하단
+        vertex(25 * scale, -20 * scale);  // 오른쪽 하단
+        endShape(CLOSE);
+    }
+
+    // 2. RGB 벤다이어그램 스타일의 3개 스쿱 (콘 위에 배치)
+    let scoopRadius = 22 * scale; // 스쿱 크기를 더 작게
+    let scoopY = -40 * scale; // 콘 위에 위치
+    
+    // 왼쪽 스쿱 (Forest Green)
+    if (progress > 0.3) {
+        let leftProgress = map(progress, 0.3, 0.6, 0, 1);
+        
+        push();
+        translate(-15 * scale, scoopY);
+        
+        fill(77, 255, 168, alpha * leftProgress); // Forest Green
+        noStroke();
+        
+        // 오글오글한 원형
+        beginShape();
+        for (let angle = 0; angle < TWO_PI; angle += 0.3) {
+            let noiseValue = noise(cos(angle) * 0.8, sin(angle) * 0.8, frameCount * 0.01);
+            let r = scoopRadius + (noiseValue - 0.5) * 8 * scale;
+            let x = cos(angle) * r;
+            let y = sin(angle) * r;
+            vertex(x, y);
+        }
+        endShape(CLOSE);
+        pop();
+    }
+    
+    // 오른쪽 스쿱 (Cornflower Blue)
+    if (progress > 0.5) {
+        let rightProgress = map(progress, 0.5, 0.75, 0, 1);
+        
+        push();
+        translate(15 * scale, scoopY);
+        
+        fill(100, 149, 237, alpha * rightProgress); // Cornflower Blue
+        noStroke();
+        
+        // 오글오글한 원형
+        beginShape();
+        for (let angle = 0; angle < TWO_PI; angle += 0.5) {
+            let noiseValue = noise(cos(angle) * 1.2 + 10, sin(angle) * 1.2 + 10, frameCount * 0.01);
+            let r = scoopRadius + (noiseValue - 0.8) * 8 * scale;
+            let x = cos(angle) * r;
+            let y = sin(angle) * r;
+            vertex(x, y);
+        }
+        endShape(CLOSE);
+        pop();
+    }
+    
+    // 가운데 위쪽 스쿱 (Yellow)
+    if (progress > 0.7) {
+        let topProgress = map(progress, 0.7, 1, 0, 1);
+        
+        push();
+        translate(0, scoopY - 10 * scale); // 살짝 위쪽에 위치
+        
+        fill(255, 255, 0, alpha * topProgress); // 순수한 노란색
+        noStroke();
+        
+        // 오글오글한 원형
+        beginShape();
+        for (let angle = 0; angle < TWO_PI; angle += 0.3) {
+            let noiseValue = noise(cos(angle) * 0.6 + 20, sin(angle) * 0.6 + 20, frameCount * 0.01);
+            let r = scoopRadius + (noiseValue - 0.5) * 8 * scale;
+            let x = cos(angle) * r;
+            let y = sin(angle) * r;
+            vertex(x, y);
+        }
+        endShape(CLOSE);
+        pop();
+    }
+}       // Easing 함수들
+        function easeInOutCubic(t) {
+            return t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2;
+        }
+        
+        function easeInOutQuart(t) {
+            return t < 0.5 ? 8 * t * t * t * t : 1 - pow(-2 * t + 2, 4) / 2;
+        }
+        
+        function easeInOutBounce(t) {
+            return t < 0.5 
+                ? (1 - easeOutBounce(1 - 2 * t)) / 2
+                : (1 + easeOutBounce(2 * t - 1)) / 2;
+        }
+        
+        function easeOutBounce(t) {
+            if (t < 1 / 2.75) {
+                return 7.5625 * t * t;
+            } else if (t < 2 / 2.75) {
+                return 7.5625 * (t -= 1.5 / 2.75) * t + 0.75;
+            } else if (t < 2.5 / 2.75) {
+                return 7.5625 * (t -= 2.25 / 2.75) * t + 0.9375;
+            } else {
+                return 7.5625 * (t -= 2.625 / 2.75) * t + 0.984375;
+            }
+        }
+
+        // 더 부드러운 easing 함수 추가
+function easeInOutSmooth(t) {
+    return t * t * (3.0 - 2.0 * t); // 더 부드러운 곡선
+}
+
+function easeInOutSmoother(t) {
+    return t * t * t * (t * (t * 6 - 15) + 10); // 매우 부드러운 곡선
+}
+
+function drawPNGMorphing(crystalIndex, progress) {
+    push();
+    
+    // PNG 이미지가 로드되었는지 확인
+    if (!pngImages[crystalIndex]) {
+        // PNG가 없으면 아이스크림 상태 유지
+        if (crystalIndex === 0) {
+            drawLemonIceCream(1.0);
+        } else if (crystalIndex === 1) {
+            drawStrawberryIceCream([100, 149, 237], 1.0);
+        } else {
+            drawBlueberryIceCream([100, 149, 237], 1.0);
+        }
+        pop();
+        return;
+    }
+    
+    // 더 부드러운 이징 적용
+    let morphEase = easeInOutSmoother(progress);
+    
+    // 1단계: 아이스크림과 PNG 블렌딩 (0-0.6) - 더 길게
+    if (progress < 0.6) {
+        let iceCreamAlpha = map(morphEase, 0, 0.6, 1.0, 0.1); // 완전히 사라지지 않게
+        
+        push();
+        tint(255, 255 * iceCreamAlpha);
+        if (crystalIndex === 0) {
+            drawLemonIceCream(1.0);
+        } else if (crystalIndex === 1) {
+            drawStrawberryIceCream([100, 149, 237], 1.0);
+        } else {
+            drawBlueberryIceCream([100, 149, 237], 1.0);
+        }
+        noTint();
+        pop();
+    }
+    
+    // 2단계: PNG 점진적 등장 (0.3-1.0) - 겹치는 구간 늘림
+    if (progress > 0.5) {
+        let pngProgress = map(morphEase, 0.3, 1.0, 0, 1);
+        
+        // 더 부드러운 알파 변화
+        let pngAlpha = map(easeInOutCubic(pngProgress), 0, 1, 0, 255);
+        
+        // 자연스러운 크기 변화 (작게 시작해서 약간 커졌다가 원래 크기로)
+        let scalePhase1 = map(pngProgress, 0, 0.4, 0.3, 1.1); // 작게 시작해서 약간 오버사이즈
+        let scalePhase2 = map(pngProgress, 0.4, 1.0, 1.1, 1.0); // 원래 크기로 돌아옴
+        let pngScale = pngProgress < 0.4 ? scalePhase1 : scalePhase2;
+        
+        // 미세한 회전 효과
+        let rotation = sin(pngProgress * PI) * 5; // 최대 5도 회전
+        
+        // 약간의 위치 변화 (자연스러운 "착지" 효과)
+        let offsetY = map(easeOutBounce(pngProgress), 0, 1, -10, 0); // 위에서 아래로 떨어지며 착지
+        
+        push();
+        translate(0, offsetY);
+        rotate(radians(rotation));
+        
+        tint(255, pngAlpha);
+        imageMode(CENTER);
+        
+        // 크기 계산
+        // 크기 계산 - 각 크리스탈별 개별 조정
+let scaleMultipliers = [1.0, 1.0, 0.6]; // icy1, icy2, icy3 순서
+let baseScale = crystals[crystalIndex].scale * 0.05 * scaleMultipliers[crystalIndex];
+let finalScale = baseScale * pngScale;
+        
+        image(pngImages[crystalIndex], 
+              0, 0, 
+              pngImages[crystalIndex].width * finalScale, 
+              pngImages[crystalIndex].height * finalScale);
+        
+        noTint();
+        pop();
+    }
+    
+    
+    
+    pop();
+}
+
+// 스크롤 텍스트 그리기 함수
+function drawScrollText() {
+    push();
+    
+    // 코딩 폰트 스타일 설정
+    textAlign(CENTER, CENTER);
+    let fontSize = canvasWidth * 0.08; // 반응형 크기
+    textSize(fontSize);
+    
+    // 텍스트 위치
+    let textX = canvasWidth / 2;
+    let textY = canvasHeight * 0.12; // 상단에 위치
+    
+    // cornflower blue 색상으로 텍스트 그리기
+    fill(100, 149, 237, 255);
+    text("SCROLL INTO SWEETNESS", textX, textY);
+    
+    pop();
+}
+
+// 모핑 파티클 효과 함수 추가
+function drawMorphingParticles(crystalIndex, progress) {
+    push();
+    
+    let particleCount = Math.floor(20 * progress);
+    let crystalColor = crystals[crystalIndex].color;
+    
+    for (let i = 0; i < particleCount; i++) {
+        let angle = (i / particleCount) * TWO_PI + frameCount * 0.02;
+        let distance = 60 + sin(frameCount * 0.05 + i) * 20;
+        let size = 2 + sin(frameCount * 0.1 + i * 0.5) * 1;
+        
+        let x = cos(angle) * distance * (1 - progress * 0.5);
+        let y = sin(angle) * distance * (1 - progress * 0.5);
+        
+        let alpha = 150 * progress * (1 - i / particleCount);
+        
+        fill(crystalColor[0], crystalColor[1], crystalColor[2], alpha);
+        noStroke();
+        ellipse(x, y, size, size);
+        
+        // 반짝임 효과
+        if (random() < 0.3) {
+            fill(255, 255, 255, alpha * 0.5);
+            ellipse(x, y, size * 0.5, size * 0.5);
+        }
+    }
+    
+    pop();
+}
+        // 헬퍼 함수들
+        function svgToP5X(svgX, centerX, scale) {
+            return (svgX - centerX) * scale;
+        }
+        
+        function svgToP5Y(svgY, centerY, scale) {
+            return (svgY - centerY) * scale;
+        }
+
+        function drawSVGRoundedRect(x, y, w, h, rx, centerX, centerY, scale) {
+            let px = svgToP5X(x, centerX, scale);
+            let py = svgToP5Y(y, centerY, scale);
+            rect(px, py, w * scale, h * scale, rx * scale);
+        }
+
+        function drawSVGPath1(points, centerX, centerY, scale) {
+            beginShape();
+            for (let point of points) {
+                let px = svgToP5X(point[0], centerX, scale);
+                let py = svgToP5Y(point[1], centerY, scale);
+                vertex(px, py);
+            }
+            endShape(CLOSE);
+        }
+
+        function drawSVGPolygon(points, centerX, centerY, scale) {
+            beginShape();
+            for (let point of points) {
+                let px = svgToP5X(point[0], centerX, scale);
+                let py = svgToP5Y(point[1], centerY, scale);
+                vertex(px, py);
+            }
+            endShape(CLOSE);
+        }
+
+        // 이벤트 처리 함수들
+        function mouseMoved() {
+            activeCrystal = -1;
+            for (let i = 0; i < crystals.length; i++) {
+                let d = dist(mouseX, mouseY, crystals[i].x, crystals[i].y);
+                if (d < crystals[i].scale * 120) {
+                    activeCrystal = i;
+                    break;
+                }
+            }
+        }
+
+        function mouseWheel(event) {
+            if (activeCrystal >= 0) {
+                let delta = event.delta;
+                let sensitivity = 0.003;
+                
+                crystalProgress[activeCrystal] += delta * sensitivity;
+                crystalProgress[activeCrystal] = constrain(crystalProgress[activeCrystal], 0, 1);
+                
+                return false;
+            }
+        }
+
+        function keyPressed() {
+            if (activeCrystal >= 0) {
+                let delta = 0;
+                switch(key) {
+                    case 'ArrowUp':
+                    case 'ArrowLeft':
+                        delta = -0.04;
+                        break;
+                    case 'ArrowDown':
+                    case 'ArrowRight':
+                        delta = 0.04;
+                        break;
+                    case ' ':
+                        delta = 0.08;
+                        break;
+                    case 'r':
+                    case 'R':
+                        crystalProgress[activeCrystal] = 0;
+                        return;
+                }
+                
+                if (delta !== 0) {
+                    crystalProgress[activeCrystal] += delta;
+                    crystalProgress[activeCrystal] = constrain(crystalProgress[activeCrystal], 0, 1);
+                }
+            }
+            
+            if (key >= '1' && key <= '3') {
+                activeCrystal = parseInt(key) - 1;
+            }
+        }
+
+        function doubleClicked() {
+            for (let i = 0; i < crystals.length; i++) {
+                let d = dist(mouseX, mouseY, crystals[i].x, crystals[i].y);
+                if (d < crystals[i].scale * 120) {
+                    crystalProgress[i] = 0;
+                    break;
+                }
+            }
+        }
+
+        // 터치 지원
+        let touchStartY = 0;
+        let touchCrystal = -1;
+
+        function touchStarted() {
+            if (touches.length > 0) {
+                touchStartY = touches[0].y;
+                for (let i = 0; i < crystals.length; i++) {
+                    let d = dist(touches[0].x, touches[0].y, crystals[i].x, crystals[i].y);
+                    if (d < crystals[i].scale * 120) {
+                        touchCrystal = i;
+                        activeCrystal = i;
+                        break;
+                    }
+                }
+            }
+            return false;
+        }
+
+        function touchMoved() {
+            if (touchCrystal >= 0 && touches.length > 0) {
+                let deltaY = touchStartY - touches[0].y;
+                let sensitivity = 0.01;
+                
+                crystalProgress[touchCrystal] += deltaY * sensitivity;
+                crystalProgress[touchCrystal] = constrain(crystalProgress[touchCrystal], 0, 1);
+                
+                touchStartY = touches[0].y;
+            }
+            return false;
+        }
+
+        function touchEnded() {
+            touchCrystal = -1;
+            activeCrystal = -1;
+            return false;
+        }
+
+        // 윈도우 리사이즈 처리
+        function windowResized() {
+            let windowRatio = windowWidth / windowHeight;
+            let a3Ratio = 1.414;
+            
+            if (windowRatio > a3Ratio) {
+                canvasHeight = windowHeight;
+                canvasWidth = canvasHeight * a3Ratio;
+            } else {
+                canvasWidth = windowWidth;
+                canvasHeight = canvasWidth / a3Ratio;
+            }
+            
+            resizeCanvas(canvasWidth, canvasHeight);
+            
+            let spacing = canvasWidth / 3;
+            let graphicScale = Math.min(canvasWidth / 1200, canvasHeight / 600) * 3.5;
+            
+            for (let i = 0; i < crystals.length; i++) {
+                crystals[i].x = spacing * (i + 0.5);
+                crystals[i].y = canvasHeight * 0.5;
+                crystals[i].scale = graphicScale;
+            }
+        }
+    </script>
+</body>
+</html>
